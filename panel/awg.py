@@ -1,4 +1,4 @@
-"""AmneziaWG state management: keys, configs, obfuscation params, live status."""
+"""Управление AmneziaWG: ключи, конфиги, параметры обфускации, текущий статус."""
 import ipaddress
 import json
 import os
@@ -15,9 +15,9 @@ CONF_DIR = os.environ.get("AWG_CONF_DIR", "/etc/amnezia/amneziawg")
 
 _lock = threading.RLock()
 
-# Parameters understood by each protocol generation.
-#   1 -> AmneziaWG 1.x: Jc/Jmin/Jmax, S1/S2, H1-H4 (single values)
-#   2 -> AmneziaWG 2.x: + S3/S4, H1-H4 as ranges, I1-I5 signature packets
+# Параметры, которые понимает каждая версия протокола.
+#   1 -> AmneziaWG 1.x: Jc/Jmin/Jmax, S1/S2, H1-H4 (одиночные значения)
+#   2 -> AmneziaWG 2.x: + S3/S4, H1-H4 как диапазоны, I1-I5 сигнатурные пакеты
 PARAMS_V1 = ["Jc", "Jmin", "Jmax", "S1", "S2", "H1", "H2", "H3", "H4"]
 PARAMS_V2 = PARAMS_V1 + ["S3", "S4", "I1", "I2", "I3", "I4", "I5"]
 
@@ -46,7 +46,7 @@ def _rand(lo, hi):
 def gen_obfuscation(proto):
     jmin = _rand(40, 80)
     p = {"Jc": _rand(4, 10), "Jmin": jmin, "Jmax": _rand(jmin + 200, 1000)}
-    # S1 + 56 must not equal S2, otherwise init and response packets have equal size.
+    # S1 + 56 не должно равняться S2, иначе пакеты init и response будут одного размера.
     while True:
         s1, s2 = _rand(15, 150), _rand(15, 150)
         if s1 + 56 != s2:
@@ -55,7 +55,7 @@ def gen_obfuscation(proto):
     if proto >= 2:
         p["S3"] = _rand(8, 64)
         p["S4"] = _rand(1, 16)
-        # Four non-overlapping header ranges spread over the 32-bit space.
+        # Четыре непересекающихся диапазона заголовков в 32-битном пространстве.
         span = (2**31 - 1000) // 4
         for i in range(4):
             base = 1000 + i * span
@@ -130,7 +130,7 @@ def server_conf(state):
     s = state["server"]
     sub, wan, ifc = s["subnet"], s["wan"], s["iface"]
     lines = [
-        "# Managed by awg-panel. Manual edits will be overwritten.",
+        "# Управляется awg-panel. Ручные правки будут перезаписаны.",
         "[Interface]",
         f"PrivateKey = {s['private_key']}",
         f"Address = {s['address']}",
@@ -192,7 +192,7 @@ def iface_up(state):
 
 
 def apply(state, restart=False):
-    """Write config and push it to the running interface."""
+    """Записать конфиг и применить его к работающему интерфейсу."""
     with _lock:
         write_conf(state)
         ifc = state["server"]["iface"]
@@ -260,7 +260,7 @@ def delete_client(cid):
 
 
 def status(state):
-    """Return {public_key: {...}} parsed from `awg show <iface> dump`."""
+    """Вернуть {public_key: {...}} из вывода `awg show <iface> dump`."""
     res = subprocess.run(["awg", "show", state["server"]["iface"], "dump"],
                          capture_output=True, text=True)
     peers = {}

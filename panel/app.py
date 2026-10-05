@@ -1,4 +1,4 @@
-"""AmneziaWG web panel."""
+"""Веб-панель AmneziaWG."""
 import argparse
 import hmac
 import io
@@ -83,7 +83,7 @@ def guard():
     if request.method == "POST":
         tok = request.form.get("csrf", "")
         if not hmac.compare_digest(tok, session.get("csrf", "")):
-            abort(400, "CSRF token mismatch")
+            abort(400, "Неверный CSRF-токен")
 
 
 @app.route("/login", methods=["GET", "POST"])
@@ -243,9 +243,9 @@ def settings():
 
 
 def cli():
-    p = argparse.ArgumentParser(description="awg-panel management")
+    p = argparse.ArgumentParser(description="Управление awg-panel")
     sub = p.add_subparsers(dest="cmd", required=True)
-    i = sub.add_parser("init", help="create server state")
+    i = sub.add_parser("init", help="создать конфигурацию сервера")
     i.add_argument("--endpoint", required=True)
     i.add_argument("--port", type=int, default=51820)
     i.add_argument("--wan", required=True)
@@ -253,17 +253,17 @@ def cli():
     i.add_argument("--dns", default="1.1.1.1, 1.0.0.1")
     i.add_argument("--proto", type=int, default=2, choices=[1, 2])
     i.add_argument("--force", action="store_true")
-    sp = sub.add_parser("set-proto", help="switch protocol generation, regenerate obfuscation")
+    sp = sub.add_parser("set-proto", help="сменить версию протокола и перегенерировать обфускацию")
     sp.add_argument("proto", type=int, choices=[1, 2])
-    pw = sub.add_parser("set-password", help="set panel login/password")
+    pw = sub.add_parser("set-password", help="задать логин/пароль панели")
     pw.add_argument("--username", default="admin")
     pw.add_argument("password")
-    sub.add_parser("render", help="write server config from state")
+    sub.add_parser("render", help="записать серверный конфиг из state.json")
     a = p.parse_args()
 
     if a.cmd == "init":
         if os.path.exists(awg.STATE_FILE) and not a.force:
-            print("state already exists, keeping it")
+            print("Конфигурация уже существует, оставляю её")
         else:
             awg.init_state(a.endpoint, a.port, a.wan, a.subnet, a.dns, a.proto)
         awg.write_conf(awg.load())

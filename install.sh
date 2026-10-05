@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# AmneziaWG server + web panel installer (Ubuntu 20.04+/Debian 11+).
-# Usage: sudo bash install.sh [--port 51820] [--panel-port 8443] [--endpoint IP] [--proto 2|1]
+# Установщик сервера AmneziaWG и веб-панели (Ubuntu 20.04+ / Debian 11+).
+# Запуск: sudo bash install.sh [--port 51820] [--panel-port 8443] [--endpoint IP] [--proto 2|1]
 set -euo pipefail
 
 AWG_PORT=51820
@@ -16,18 +16,18 @@ while [[ $# -gt 0 ]]; do
     --panel-port) PANEL_PORT="$2"; shift 2 ;;
     --endpoint) ENDPOINT="$2"; shift 2 ;;
     --proto) PROTO="$2"; shift 2 ;;
-    *) echo "unknown option: $1"; exit 1 ;;
+    *) echo "Неизвестный параметр: $1"; exit 1 ;;
   esac
 done
 
 log() { echo -e "\e[1;32m==>\e[0m $*"; }
 warn() { echo -e "\e[1;33m!!\e[0m $*"; }
-[[ $EUID -eq 0 ]] || { echo "Run as root"; exit 1; }
+[[ $EUID -eq 0 ]] || { echo "Запустите от имени root"; exit 1; }
 
 . /etc/os-release
 export DEBIAN_FRONTEND=noninteractive
 
-log "Installing base packages"
+log "Установка базовых пакетов"
 apt-get update -y
 apt-get install -y --no-install-recommends ca-certificates curl gnupg iptables openssl \
   python3 python3-venv python3-pip git make gcc build-essential dkms qrencode \
@@ -35,11 +35,11 @@ apt-get install -y --no-install-recommends ca-certificates curl gnupg iptables o
   curl gnupg iptables openssl python3 python3-venv python3-pip git make gcc build-essential qrencode
 
 install_ppa() {
-  log "Adding Amnezia PPA"
+  log "Подключение репозитория Amnezia (PPA)"
   local codename="$VERSION_CODENAME"
-  if [[ "$ID" != "ubuntu" ]]; then codename=focal; fi   # Debian: use focal build of the PPA
+  if [[ "$ID" != "ubuntu" ]]; then codename=focal; fi   # Для Debian берём сборку PPA под focal
   install -d /etc/apt/keyrings
-  # Signing key straight from Launchpad (no hardcoded key ID).
+  # Ключ подписи берём напрямую из Launchpad (без жёстко прописанного ID).
   curl -fsSL "https://api.launchpad.net/1.0/~amnezia/+archive/ubuntu/ppa?ws.op=getSigningKeyData" \
     | python3 -c 'import json,sys; print(json.load(sys.stdin))' \
     | gpg --dearmor --yes -o /etc/apt/keyrings/amnezia.gpg
@@ -51,7 +51,7 @@ install_ppa() {
 }
 
 install_go_userspace() {
-  warn "Kernel module unavailable, building userspace amneziawg-go"
+  warn "Модуль ядра недоступен — собираю userspace-версию amneziawg-go"
   if ! command -v go >/dev/null || ! go version | grep -qE 'go1\.(2[2-9]|[3-9][0-9])'; then
     local arch; arch=$(dpkg --print-architecture)
     local gover; gover=$(curl -fsSL "https://go.dev/VERSION?m=text" | head -1)
@@ -65,22 +65,22 @@ install_go_userspace() {
 }
 
 install_tools_from_source() {
-  warn "Building amneziawg-tools from source"
+  warn "Сборка amneziawg-tools из исходников"
   rm -rf /tmp/amneziawg-tools
   git clone --depth 1 https://github.com/amnezia-vpn/amneziawg-tools /tmp/amneziawg-tools
   make -C /tmp/amneziawg-tools/src
   make -C /tmp/amneziawg-tools/src install WITH_WGQUICK=yes WITH_SYSTEMDUNITS=yes
 }
 
-log "Installing AmneziaWG"
-install_ppa || warn "PPA setup failed"
+log "Установка AmneziaWG"
+install_ppa || warn "Не удалось подключить PPA"
 apt-get install -y amneziawg amneziawg-tools || apt-get install -y amneziawg-tools || true
 command -v awg >/dev/null || install_tools_from_source
 if ! modprobe amneziawg 2>/dev/null; then
   install_go_userspace
 fi
 
-log "Enabling IP forwarding"
+log "Включение пересылки IP-пакетов"
 cat > /etc/sysctl.d/99-amneziawg.conf <<SYSCTL
 net.ipv4.ip_forward = 1
 net.ipv6.conf.all.forwarding = 1
@@ -89,9 +89,9 @@ sysctl --system >/dev/null
 
 WAN=$(ip -4 route show default | awk '{for(i=1;i<=NF;i++) if($i=="dev"){print $(i+1); exit}}')
 [[ -n "$ENDPOINT" ]] || ENDPOINT=$(curl -4 -fsS --max-time 5 https://api.ipify.org || ip -4 addr show "$WAN" | awk '/inet /{sub(/\/.*/,"",$2); print $2; exit}')
-log "WAN interface: $WAN, endpoint: $ENDPOINT"
+log "Внешний интерфейс: $WAN, адрес сервера: $ENDPOINT"
 
-log "Installing panel to /opt/awg-panel"
+log "Установка панели в /opt/awg-panel"
 install -d /opt/awg-panel /etc/awg-panel
 chmod 700 /etc/awg-panel
 cp -r "$SRC_DIR/panel/." /opt/awg-panel/
@@ -102,11 +102,11 @@ PANEL_PY="/opt/awg-panel/venv/bin/python /opt/awg-panel/app.py"
 
 $PANEL_PY init --endpoint "$ENDPOINT" --port "$AWG_PORT" --wan "$WAN" --proto "$PROTO"
 
-log "Starting awg-quick@$IFACE"
+log "Запуск awg-quick@$IFACE"
 systemctl enable "awg-quick@$IFACE" >/dev/null 2>&1 || true
 if ! systemctl restart "awg-quick@$IFACE"; then
   if [[ "$PROTO" == "2" ]]; then
-    warn "AmneziaWG 2.x parameters rejected by installed version, falling back to 1.x"
+    warn "Установленная версия не принимает параметры AmneziaWG 2.x — откат на 1.x"
     $PANEL_PY set-proto 1
     systemctl restart "awg-quick@$IFACE"
   else
@@ -122,7 +122,7 @@ else
 fi
 
 if [[ ! -f /etc/awg-panel/tls.crt ]]; then
-  log "Generating self-signed TLS certificate"
+  log "Генерация самоподписанного TLS-сертификата"
   openssl req -x509 -newkey rsa:2048 -nodes -days 3650 -subj "/CN=$ENDPOINT" \
     -addext "subjectAltName=IP:$ENDPOINT" \
     -keyout /etc/awg-panel/tls.key -out /etc/awg-panel/tls.crt 2>/dev/null \

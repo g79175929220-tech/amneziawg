@@ -1,5 +1,5 @@
 [Unit]
-Description=AmneziaWG web panel
+Description=Веб-панель AmneziaWG
 After=network-online.target awg-quick@awg0.service
 Wants=network-online.target
 
