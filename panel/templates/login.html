@@ -1,0 +1,11 @@
+{% extends "base.html" %}
+{% block body %}
+<div class="card narrow">
+  <h1>Вход в панель</h1>
+  <form method="post">
+    <label>Логин <input name="username" autocomplete="username" required autofocus></label>
+    <label>Пароль <input name="password" type="password" autocomplete="current-password" required></label>
+    <button>Войти</button>
+  </form>
+</div>
+{% endblock %}

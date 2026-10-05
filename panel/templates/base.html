@@ -1,0 +1,30 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>AmneziaWG Panel</title>
+<link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+</head>
+<body>
+{% if session.auth %}
+<header>
+  <a class="brand" href="{{ url_for('index') }}">AmneziaWG</a>
+  <nav>
+    <a href="{{ url_for('index') }}">Клиенты</a>
+    <a href="{{ url_for('settings') }}">Настройки</a>
+    <form method="post" action="{{ url_for('logout') }}" class="inline">
+      <input type="hidden" name="csrf" value="{{ csrf_token() }}">
+      <button class="link">Выход</button>
+    </form>
+  </nav>
+</header>
+{% endif %}
+<main>
+{% for cat, msg in get_flashed_messages(with_categories=true) %}
+  <div class="flash {{ cat }}">{{ msg }}</div>
+{% endfor %}
+{% block body %}{% endblock %}
+</main>
+</body>
+</html>

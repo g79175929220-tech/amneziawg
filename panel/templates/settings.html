@@ -1,0 +1,54 @@
+{% extends "base.html" %}
+{% block body %}
+<div class="card">
+  <h2>Сервер</h2>
+  <form method="post" class="form-grid">
+    <input type="hidden" name="csrf" value="{{ csrf_token() }}">
+    <input type="hidden" name="action" value="server">
+    <label>Endpoint (IP/домен) <input name="endpoint" value="{{ s.endpoint }}" required></label>
+    <label>UDP-порт <input name="port" type="number" min="1" max="65535" value="{{ s.port }}"></label>
+    <label>DNS для клиентов <input name="dns" value="{{ s.dns }}"></label>
+    <label>MTU <input name="mtu" type="number" min="1280" max="1500" value="{{ s.mtu }}"></label>
+    <label>PersistentKeepalive <input name="keepalive" type="number" min="0" max="300" value="{{ s.keepalive }}"></label>
+    <div><button>Сохранить</button></div>
+  </form>
+  <p class="muted">Смена endpoint/порта/DNS/MTU требует обновить конфиги клиентов.</p>
+</div>
+
+<div class="card">
+  <h2>Обфускация AmneziaWG {{ '2.x' if s.proto >= 2 else '1.x' }}</h2>
+  <form method="post" class="form-grid">
+    <input type="hidden" name="csrf" value="{{ csrf_token() }}">
+    <input type="hidden" name="action" value="obfs">
+    {% for k in keys %}
+    <label>{{ k }} <input name="{{ k }}" value="{{ s.obfs.get(k, '') }}" {% if k.startswith('I') %}placeholder="опционально, напр. <b 0x...>"{% endif %}></label>
+    {% endfor %}
+    <div><button>Применить</button></div>
+  </form>
+  <form method="post" class="inline" onsubmit="return confirm('Все клиентские конфиги станут недействительны. Продолжить?')">
+    <input type="hidden" name="csrf" value="{{ csrf_token() }}">
+    <input type="hidden" name="action" value="regen">
+    <button class="danger">Сгенерировать новые параметры</button>
+  </form>
+  <form method="post" class="inline">
+    <input type="hidden" name="csrf" value="{{ csrf_token() }}">
+    <input type="hidden" name="action" value="restart">
+    <button class="secondary">Перезапустить интерфейс</button>
+  </form>
+</div>
+
+<div class="card">
+  <h2>Пароль панели</h2>
+  <form method="post" class="form-grid">
+    <input type="hidden" name="csrf" value="{{ csrf_token() }}">
+    <input type="hidden" name="action" value="password">
+    <label>Текущий <input name="old" type="password" autocomplete="current-password" required></label>
+    <label>Новый (≥10 символов) <input name="new" type="password" minlength="10" autocomplete="new-password" required></label>
+    <div><button>Сменить</button></div>
+  </form>
+</div>
+
+<div class="card">
+  <details><summary>Серверный конфиг (только чтение)</summary><pre>{{ server_conf }}</pre></details>
+</div>
+{% endblock %}

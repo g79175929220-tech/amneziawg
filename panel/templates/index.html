@@ -1,0 +1,60 @@
+{% extends "base.html" %}
+{% block body %}
+<div class="card">
+  <div class="row between">
+    <h1>Сервер <code>{{ s.iface }}</code></h1>
+    <span class="badge {{ 'on' if up else 'off' }}">{{ 'работает' if up else 'остановлен' }}</span>
+  </div>
+  <div class="grid">
+    <div><small>Endpoint</small><b>{{ s.endpoint }}:{{ s.port }}</b></div>
+    <div><small>Подсеть</small><b>{{ s.subnet }}</b></div>
+    <div><small>Протокол</small><b>AmneziaWG {{ '2.x' if s.proto >= 2 else '1.x' }}</b></div>
+    <div><small>Клиентов</small><b>{{ clients|length }}</b></div>
+  </div>
+</div>
+
+<div class="card">
+  <div class="row between">
+    <h2>Клиенты</h2>
+    <form method="post" action="{{ url_for('create_client') }}" class="row">
+      <input type="hidden" name="csrf" value="{{ csrf_token() }}">
+      <input name="name" placeholder="Имя (напр. phone-ivan)" maxlength="64" required>
+      <button>+ Добавить</button>
+    </form>
+  </div>
+  {% if clients %}
+  <div class="scroll">
+  <table>
+    <thead><tr><th></th><th>Имя</th><th>IP</th><th>Handshake</th><th>↓ Rx</th><th>↑ Tx</th><th></th></tr></thead>
+    <tbody>
+    {% for c in clients %}
+    <tr class="{{ '' if c.enabled else 'disabled' }}">
+      <td><span class="dot {{ 'on' if c.online else '' }}" title="{{ c.endpoint }}"></span></td>
+      <td><a href="{{ url_for('client', cid=c.id) }}">{{ c.name }}</a></td>
+      <td><code>{{ c.ip }}</code></td>
+      <td>{{ c.handshake|ago if c.enabled else 'отключён' }}</td>
+      <td>{{ c.rx|bytes }}</td>
+      <td>{{ c.tx|bytes }}</td>
+      <td class="actions">
+        <a class="btn small" href="{{ url_for('download', cid=c.id) }}">.conf</a>
+        <form method="post" action="{{ url_for('toggle', cid=c.id) }}" class="inline">
+          <input type="hidden" name="csrf" value="{{ csrf_token() }}">
+          <button class="small secondary">{{ 'Выкл' if c.enabled else 'Вкл' }}</button>
+        </form>
+        <form method="post" action="{{ url_for('delete', cid=c.id) }}" class="inline"
+              onsubmit="return confirm('Удалить {{ c.name }}?')">
+          <input type="hidden" name="csrf" value="{{ csrf_token() }}">
+          <button class="small danger">✕</button>
+        </form>
+      </td>
+    </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+  </div>
+  {% else %}
+  <p class="muted">Клиентов пока нет — добавьте первого.</p>
+  {% endif %}
+</div>
+<script>setTimeout(() => location.reload(), 15000);</script>
+{% endblock %}
