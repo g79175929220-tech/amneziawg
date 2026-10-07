@@ -8,7 +8,7 @@
   <div class="grid">
     <div><small>Endpoint</small><b>{{ s.endpoint }}:{{ s.port }}</b></div>
     <div><small>Подсеть</small><b>{{ s.subnet }}</b></div>
-    <div><small>Протокол</small><b>AmneziaWG {{ '2.x' if s.proto >= 2 else '1.x' }}</b></div>
+    <div><small>Протокол</small><b>AmneziaWG {{ s.proto }}.x</b></div>
     <div><small>Клиентов</small><b>{{ clients|length }}</b></div>
   </div>
 </div>

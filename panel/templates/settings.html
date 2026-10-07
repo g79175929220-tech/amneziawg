@@ -16,7 +16,7 @@
 </div>
 
 <div class="card">
-  <h2>Обфускация AmneziaWG {{ '2.x' if s.proto >= 2 else '1.x' }}</h2>
+  <h2>Обфускация AmneziaWG {{ s.proto }}.x</h2>
   <form method="post" class="form-grid">
     <input type="hidden" name="csrf" value="{{ csrf_token() }}">
     <input type="hidden" name="action" value="obfs">

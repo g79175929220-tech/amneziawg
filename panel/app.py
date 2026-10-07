@@ -211,7 +211,7 @@ def settings():
                 awg.apply(state, restart=restart)
                 flash("Настройки сервера сохранены", "ok")
             elif action == "obfs":
-                for k in (awg.PARAMS_V2 if s["proto"] >= 2 else awg.PARAMS_V1):
+                for k in awg.params_for(s["proto"]):
                     v = request.form.get(k, "").strip()
                     s["obfs"][k] = int(v) if v.isdigit() else v
                 awg.save(state)
@@ -238,7 +238,7 @@ def settings():
         except Exception as e:  # noqa: BLE001
             flash(f"Ошибка: {e}", "err")
         return redirect(url_for("settings"))
-    keys = awg.PARAMS_V2 if s["proto"] >= 2 else awg.PARAMS_V1
+    keys = awg.params_for(s["proto"])
     return render_template("settings.html", s=s, keys=keys, server_conf=awg.server_conf(state))
 
 
@@ -251,11 +251,11 @@ def cli():
     i.add_argument("--wan", required=True)
     i.add_argument("--subnet", default="10.8.0.0/24")
     i.add_argument("--dns", default="1.1.1.1, 1.0.0.1")
-    i.add_argument("--proto", type=int, default=2, choices=[1, 2])
-    i.add_argument("--iface", default="awg0")
+    i.add_argument("--proto", type=int, default=3, choices=[1, 2, 3])
+    i.add_argument("--iface", default="awg3")
     i.add_argument("--force", action="store_true")
     sp = sub.add_parser("set-proto", help="сменить версию протокола и перегенерировать обфускацию")
-    sp.add_argument("proto", type=int, choices=[1, 2])
+    sp.add_argument("proto", type=int, choices=[1, 2, 3])
     pw = sub.add_parser("set-password", help="задать логин/пароль панели")
     pw.add_argument("--username", default="admin")
     pw.add_argument("password")

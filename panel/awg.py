@@ -11,7 +11,9 @@ import uuid
 
 STATE_DIR = os.environ.get("AWG_PANEL_DIR", "/etc/awg-panel")
 STATE_FILE = os.path.join(STATE_DIR, "state.json")
-CONF_DIR = os.environ.get("AWG_CONF_DIR", "/etc/amnezia/amneziawg")
+CONF_DIR = os.environ.get("AWG_CONF_DIR", "/etc/awg3")
+# Шаблон systemd-юнита, поднимающего интерфейс ({iface} подставляется).
+SERVICE = os.environ.get("AWG_SERVICE", "awg3-quick@{iface}")
 
 _lock = threading.RLock()
 
@@ -19,7 +21,17 @@ _lock = threading.RLock()
 #   1 -> AmneziaWG 1.x: Jc/Jmin/Jmax, S1/S2, H1-H4 (одиночные значения)
 #   2 -> AmneziaWG 2.x: + S3/S4, H1-H4 как диапазоны, I1-I5 сигнатурные пакеты
 PARAMS_V1 = ["Jc", "Jmin", "Jmax", "S1", "S2", "H1", "H2", "H3", "H4"]
+#   3 -> AmneziaWG 3.x: + HeaderProtectionKey (шифрование заголовков, S1-S4 >= 12),
+#        ContentPaddingAddition, RandomTrailers (3.1), DisableCookies (3.1)
 PARAMS_V2 = PARAMS_V1 + ["S3", "S4", "I1", "I2", "I3", "I4", "I5"]
+PARAMS_V3 = PARAMS_V2 + ["HeaderProtectionKey", "ContentPaddingAddition",
+                         "RandomTrailers", "DisableCookies"]
+# Параметры только для сервера — в клиентский конфиг не попадают.
+SERVER_ONLY = {"DisableCookies"}
+
+
+def params_for(proto):
+    return {1: PARAMS_V1, 2: PARAMS_V2}.get(proto, PARAMS_V3)
 
 
 def run(cmd, inp=None, check=True):
@@ -47,14 +59,15 @@ def gen_obfuscation(proto):
     jmin = _rand(40, 80)
     p = {"Jc": _rand(4, 10), "Jmin": jmin, "Jmax": _rand(jmin + 200, 1000)}
     # S1 + 56 не должно равняться S2, иначе пакеты init и response будут одного размера.
+    # Для защиты заголовков в 3.x все S1-S4 должны быть не меньше 12.
     while True:
         s1, s2 = _rand(15, 150), _rand(15, 150)
         if s1 + 56 != s2:
             break
     p["S1"], p["S2"] = s1, s2
     if proto >= 2:
-        p["S3"] = _rand(8, 64)
-        p["S4"] = _rand(1, 16)
+        p["S3"] = _rand(12 if proto >= 3 else 8, 64)
+        p["S4"] = _rand(12, 32) if proto >= 3 else _rand(1, 16)
         # Четыре непересекающихся диапазона заголовков в 32-битном пространстве.
         span = (2**31 - 1000) // 4
         for i in range(4):
@@ -64,6 +77,11 @@ def gen_obfuscation(proto):
             p[f"H{i + 1}"] = f"{lo}-{hi}"
         for i in range(1, 6):
             p[f"I{i}"] = ""
+        if proto >= 3:
+            p["HeaderProtectionKey"] = genkey()[0]
+            p["ContentPaddingAddition"] = "0-64"
+            p["RandomTrailers"] = "on"
+            p["DisableCookies"] = "off"
     else:
         hs = set()
         while len(hs) < 4:
@@ -90,7 +108,7 @@ def save(state):
 
 
 def init_state(endpoint, port, wan, subnet="10.8.0.0/24", dns="1.1.1.1, 1.0.0.1",
-               proto=2, iface="awg0", mtu=1376):
+               proto=3, iface="awg3", mtu=1376):
     net = ipaddress.ip_network(subnet, strict=False)
     priv, pub = genkey()
     state = {
@@ -115,10 +133,11 @@ def init_state(endpoint, port, wan, subnet="10.8.0.0/24", dns="1.1.1.1, 1.0.0.1"
     return state
 
 
-def obfs_lines(srv):
-    keys = PARAMS_V2 if srv["proto"] >= 2 else PARAMS_V1
+def obfs_lines(srv, client=False):
     out = []
-    for k in keys:
+    for k in params_for(srv["proto"]):
+        if client and k in SERVER_ONLY:
+            continue
         v = srv["obfs"].get(k)
         if v is None or v == "":
             continue
@@ -160,7 +179,7 @@ def client_conf(state, c):
         f"Address = {c['ip']}/32",
         f"DNS = {s['dns']}",
         f"MTU = {s['mtu']}",
-        *obfs_lines(s),
+        *obfs_lines(s, client=True),
         "",
         "[Peer]",
         f"PublicKey = {s['public_key']}",
@@ -197,7 +216,7 @@ def apply(state, restart=False):
         write_conf(state)
         ifc = state["server"]["iface"]
         if restart or not iface_up(state):
-            run(["systemctl", "restart", f"awg-quick@{ifc}"])
+            run(["systemctl", "restart", SERVICE.format(iface=ifc)])
             return
         stripped = run(["awg-quick", "strip", conf_path(state)])
         with tempfile.NamedTemporaryFile("w", delete=False) as f:
