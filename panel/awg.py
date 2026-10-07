@@ -237,7 +237,7 @@ def next_ip(state):
     raise RuntimeError("Подсеть заполнена")
 
 
-def add_client(name):
+def add_client(name, expires=None):
     with _lock:
         state = load()
         priv, pub = genkey()
@@ -250,6 +250,7 @@ def add_client(name):
             "ip": next_ip(state),
             "enabled": True,
             "created": int(time.time()),
+            "expires": expires,
         }
         state["clients"].append(c)
         save(state)
@@ -268,6 +269,21 @@ def update_client(cid, **fields):
             raise KeyError(cid)
         save(state)
         apply(state)
+
+
+def enforce_expiry():
+    """Отключить клиентов с истёкшим сроком действия."""
+    with _lock:
+        state = load()
+        now = time.time()
+        changed = False
+        for c in state["clients"]:
+            if c["enabled"] and c.get("expires") and c["expires"] < now:
+                c["enabled"] = False
+                changed = True
+        if changed:
+            save(state)
+            apply(state)
 
 
 def delete_client(cid):

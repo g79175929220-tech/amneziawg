@@ -78,11 +78,12 @@ app.jinja_env.globals["csrf_token"] = csrf_token
 def guard():
     if request.endpoint in ("login", "static"):
         return
+    is_api = request.path.startswith("/api/")
     if not session.get("auth"):
-        return redirect(url_for("login"))
-    if request.method == "POST":
-        tok = request.form.get("csrf", "")
-        if not hmac.compare_digest(tok, session.get("csrf", "")):
+        return ({"error": "Требуется вход"}, 401) if is_api else redirect(url_for("login"))
+    if request.method not in ("GET", "HEAD"):
+        tok = request.headers.get("X-CSRF-Token") if is_api else request.form.get("csrf")
+        if not hmac.compare_digest(tok or "", session.get("csrf", "")):
             abort(400, "Неверный CSRF-токен")
 
 
@@ -117,31 +118,8 @@ def logout():
 
 @app.get("/")
 def index():
-    state = awg.load()
-    live = awg.status(state)
-    now = time.time()
-    rows = []
-    for c in state["clients"]:
-        st = (live or {}).get(c["public_key"], {})
-        hs = st.get("handshake", 0)
-        rows.append({**c, "rx": st.get("rx", 0), "tx": st.get("tx", 0),
-                     "handshake": hs, "endpoint": st.get("endpoint", ""),
-                     "online": bool(hs) and now - hs < 180})
-    return render_template("index.html", s=state["server"], clients=rows, up=live is not None)
-
-
-@app.post("/clients")
-def create_client():
-    name = request.form.get("name", "").strip()[:64]
-    if not name:
-        flash("Укажите имя клиента", "err")
-        return redirect(url_for("index"))
-    try:
-        c = awg.add_client(name)
-    except Exception as e:  # noqa: BLE001
-        flash(f"Ошибка: {e}", "err")
-        return redirect(url_for("index"))
-    return redirect(url_for("client", cid=c["id"]))
+    s = awg.load()["server"]
+    return render_template("index.html", s=s)
 
 
 def _get_client(cid):
@@ -152,14 +130,92 @@ def _get_client(cid):
     abort(404)
 
 
-@app.get("/clients/<cid>")
-def client(cid):
+def _parse_expires(val):
+    """'' -> None, 'YYYY-MM-DD' -> конец этого дня (локальное время сервера)."""
+    if not val:
+        return None
+    try:
+        return int(time.mktime(time.strptime(val, "%Y-%m-%d"))) + 86399
+    except ValueError:
+        abort(400, "Неверная дата")
+
+
+@app.get("/api/clients")
+def api_clients():
+    awg.enforce_expiry()
+    state = awg.load()
+    live = awg.status(state)
+    now = time.time()
+    out = []
+    for c in state["clients"]:
+        st = (live or {}).get(c["public_key"], {})
+        hs = st.get("handshake", 0)
+        out.append({
+            "id": c["id"], "name": c["name"], "ip": c["ip"], "enabled": c["enabled"],
+            "created": c.get("created"), "expires": c.get("expires"),
+            "rx": st.get("rx", 0), "tx": st.get("tx", 0), "handshake": hs,
+            "endpoint": st.get("endpoint", ""),
+            "online": c["enabled"] and bool(hs) and now - hs < 180,
+        })
+    return {"up": live is not None, "now": int(now), "clients": out}
+
+
+@app.post("/api/clients")
+def api_create():
+    data = request.get_json(silent=True) or {}
+    name = str(data.get("name", "")).strip()[:64]
+    if not name:
+        return {"error": "Укажите имя клиента"}, 400
+    try:
+        c = awg.add_client(name, expires=_parse_expires(data.get("expires")))
+    except Exception as e:  # noqa: BLE001
+        return {"error": str(e)}, 500
+    return {"id": c["id"]}
+
+
+@app.patch("/api/clients/<cid>")
+def api_update(cid):
+    _get_client(cid)
+    data = request.get_json(silent=True) or {}
+    fields = {}
+    if "name" in data:
+        name = str(data["name"]).strip()[:64]
+        if not name:
+            return {"error": "Имя не может быть пустым"}, 400
+        fields["name"] = name
+    if "enabled" in data:
+        fields["enabled"] = bool(data["enabled"])
+    if "expires" in data:
+        fields["expires"] = _parse_expires(data["expires"])
+        if fields["expires"] and fields["expires"] > time.time():
+            fields.setdefault("enabled", True)
+    awg.update_client(cid, **fields)
+    return {"ok": True}
+
+
+@app.delete("/api/clients/<cid>")
+def api_delete(cid):
+    _get_client(cid)
+    awg.delete_client(cid)
+    return {"ok": True}
+
+
+@app.get("/api/clients/<cid>/qr.svg")
+def api_qr(cid):
     state, c = _get_client(cid)
-    conf = awg.client_conf(state, c)
-    img = qrcode.make(conf, image_factory=qrcode.image.svg.SvgPathImage, box_size=8)
+    img = qrcode.make(awg.client_conf(state, c), image_factory=qrcode.image.svg.SvgPathImage,
+                      box_size=10, border=2)
     buf = io.BytesIO()
     img.save(buf)
-    return render_template("client.html", c=c, conf=conf, qr=buf.getvalue().decode())
+    return Response(buf.getvalue(), mimetype="image/svg+xml",
+                    headers={"Cache-Control": "no-store"})
+
+
+@app.get("/api/clients/<cid>/config")
+def api_config(cid):
+    state, c = _get_client(cid)
+    return Response(awg.client_conf(state, c), mimetype="text/plain",
+                    headers={"Cache-Control": "no-store"})
 
 
 @app.get("/clients/<cid>/download")
@@ -168,28 +224,6 @@ def download(cid):
     fname = "".join(ch if ch.isalnum() or ch in "-_" else "_" for ch in c["name"]) or "client"
     return Response(awg.client_conf(state, c), mimetype="text/plain",
                     headers={"Content-Disposition": f'attachment; filename="{fname}.conf"'})
-
-
-@app.post("/clients/<cid>/toggle")
-def toggle(cid):
-    _, c = _get_client(cid)
-    awg.update_client(cid, enabled=not c["enabled"])
-    return redirect(url_for("index"))
-
-
-@app.post("/clients/<cid>/rename")
-def rename(cid):
-    name = request.form.get("name", "").strip()[:64]
-    if name:
-        awg.update_client(cid, name=name)
-    return redirect(url_for("client", cid=cid))
-
-
-@app.post("/clients/<cid>/delete")
-def delete(cid):
-    awg.delete_client(cid)
-    flash("Клиент удалён", "ok")
-    return redirect(url_for("index"))
 
 
 @app.route("/settings", methods=["GET", "POST"])
@@ -281,6 +315,21 @@ def cli():
         save_panel(cfg)
     elif a.cmd == "render":
         awg.write_conf(awg.load())
+
+
+def _expiry_loop():
+    while True:
+        time.sleep(60)
+        try:
+            awg.enforce_expiry()
+        except Exception as e:  # noqa: BLE001
+            app.logger.warning("Проверка сроков клиентов: %s", e)
+
+
+if __name__ != "__main__" and os.environ.get("AWG_PANEL_NO_BG") != "1":
+    # Под gunicorn (один воркер) — фоновая проверка сроков действия клиентов.
+    import threading
+    threading.Thread(target=_expiry_loop, daemon=True).start()
 
 
 if __name__ == "__main__":
