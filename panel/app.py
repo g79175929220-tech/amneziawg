@@ -76,7 +76,7 @@ app.jinja_env.globals["csrf_token"] = csrf_token
 
 @app.before_request
 def guard():
-    if request.endpoint in ("login", "static"):
+    if request.endpoint in ("login", "static", "share_page", "share_redeem"):
         return
     is_api = request.path.startswith("/api/")
     if not session.get("auth"):
@@ -140,22 +140,45 @@ def _parse_expires(val):
         abort(400, "Неверная дата")
 
 
+def _parse_limit(data):
+    """Лимит из запроса: limit_gb (0/пусто — без лимита), limit_period total|month."""
+    raw = data.get("limit_gb")
+    if raw in (None, "", 0, "0"):
+        limit = None
+    else:
+        try:
+            gb = float(str(raw).replace(",", "."))
+        except ValueError:
+            abort(400, "Неверный лимит")
+        if gb <= 0 or gb > 1_000_000:
+            abort(400, "Неверный лимит")
+        limit = int(gb * 1024**3)
+    period = data.get("limit_period", "total")
+    if period not in ("total", "month"):
+        abort(400, "Неверный период лимита")
+    return limit, period
+
+
 @app.get("/api/clients")
 def api_clients():
-    awg.enforce_expiry()
     state = awg.load()
     live = awg.status(state)
+    shares = awg.active_shares(state)
     now = time.time()
     out = []
     for c in state["clients"]:
         st = (live or {}).get(c["public_key"], {})
         hs = st.get("handshake", 0)
+        rx, tx = awg.live_usage(c, live)
         out.append({
             "id": c["id"], "name": c["name"], "ip": c["ip"], "enabled": c["enabled"],
+            "disabled_reason": c.get("disabled_reason"),
             "created": c.get("created"), "expires": c.get("expires"),
-            "rx": st.get("rx", 0), "tx": st.get("tx", 0), "handshake": hs,
+            "limit_bytes": c.get("limit_bytes"), "limit_period": c.get("limit_period", "total"),
+            "rx": rx, "tx": tx, "handshake": hs,
             "endpoint": st.get("endpoint", ""),
             "online": c["enabled"] and bool(hs) and now - hs < 180,
+            "share_expires": shares.get(c["id"]),
         })
     return {"up": live is not None, "now": int(now), "clients": out}
 
@@ -166,8 +189,10 @@ def api_create():
     name = str(data.get("name", "")).strip()[:64]
     if not name:
         return {"error": "Укажите имя клиента"}, 400
+    limit, period = _parse_limit(data)
     try:
-        c = awg.add_client(name, expires=_parse_expires(data.get("expires")))
+        c = awg.add_client(name, expires=_parse_expires(data.get("expires")),
+                           limit_bytes=limit, limit_period=period)
     except Exception as e:  # noqa: BLE001
         return {"error": str(e)}, 500
     return {"id": c["id"]}
@@ -187,10 +212,57 @@ def api_update(cid):
         fields["enabled"] = bool(data["enabled"])
     if "expires" in data:
         fields["expires"] = _parse_expires(data["expires"])
-        if fields["expires"] and fields["expires"] > time.time():
-            fields.setdefault("enabled", True)
-    awg.update_client(cid, **fields)
+    if "limit_gb" in data:
+        fields["limit_bytes"], fields["limit_period"] = _parse_limit(data)
+    if data.get("reset_usage"):
+        fields["reset_usage"] = True
+    try:
+        awg.update_client(cid, **fields)
+    except ValueError as e:
+        return {"error": str(e)}, 409
     return {"ok": True}
+
+
+SHARE_TTLS = {"1h": 3600, "24h": 86400, "7d": 7 * 86400}
+
+
+@app.post("/api/clients/<cid>/share")
+def api_share(cid):
+    _get_client(cid)
+    ttl = SHARE_TTLS.get((request.get_json(silent=True) or {}).get("ttl"), 86400)
+    token, expires = awg.create_share(cid, ttl)
+    return {"url": url_for("share_page", token=token, _external=True), "expires": expires}
+
+
+def _share_headers(resp):
+    resp.headers.update({"Cache-Control": "no-store", "Referrer-Policy": "no-referrer",
+                         "X-Robots-Tag": "noindex, nofollow"})
+    return resp
+
+
+@app.get("/s/<token>")
+def share_page(token):
+    # GET ссылку не гасит: превью в мессенджерах тоже делают GET.
+    c = awg.share_info(token)
+    resp = app.make_response((render_template("share.html", c=c, token=token, conf=None),
+                              200 if c else 404))
+    return _share_headers(resp)
+
+
+@app.post("/s/<token>")
+def share_redeem(token):
+    res = awg.redeem_share(token)
+    if not res:
+        resp = app.make_response((render_template("share.html", c=None, token=token, conf=None), 404))
+        return _share_headers(resp)
+    state, c = res
+    conf = awg.client_conf(state, c)
+    img = qrcode.make(conf, image_factory=qrcode.image.svg.SvgPathImage, box_size=10, border=2)
+    buf = io.BytesIO()
+    img.save(buf)
+    fname = "".join(ch if ch.isalnum() or ch in "-_" else "_" for ch in c["name"]) or "client"
+    return _share_headers(app.make_response(render_template(
+        "share.html", c=c, token=token, conf=conf, qr=buf.getvalue().decode(), fname=fname)))
 
 
 @app.delete("/api/clients/<cid>")
@@ -228,6 +300,14 @@ def download(cid):
 
 @app.route("/settings", methods=["GET", "POST"])
 def settings():
+    if request.method == "POST":
+        # Чтение-изменение-запись state под общей блокировкой (см. awg._StateLock).
+        with awg._lock:
+            return _settings()
+    return _settings()
+
+
+def _settings():
     state = awg.load()
     s = state["server"]
     if request.method == "POST":
@@ -295,7 +375,11 @@ def cli():
     pw.add_argument("password")
     sub.add_parser("render", help="записать серверный конфиг из state.json")
     a = p.parse_args()
+    with awg._lock:
+        _run_cli(a)
 
+
+def _run_cli(a):
     if a.cmd == "init":
         if os.path.exists(awg.STATE_FILE) and not a.force:
             print("Конфигурация уже существует, оставляю её")
@@ -317,19 +401,19 @@ def cli():
         awg.write_conf(awg.load())
 
 
-def _expiry_loop():
+def _check_loop():
     while True:
-        time.sleep(60)
+        time.sleep(15)
         try:
-            awg.enforce_expiry()
+            awg.check()
         except Exception as e:  # noqa: BLE001
-            app.logger.warning("Проверка сроков клиентов: %s", e)
+            app.logger.warning("Проверка трафика и сроков клиентов: %s", e)
 
 
 if __name__ != "__main__" and os.environ.get("AWG_PANEL_NO_BG") != "1":
-    # Под gunicorn (один воркер) — фоновая проверка сроков действия клиентов.
+    # Под gunicorn (один воркер) — фоновый учёт трафика, сроков и лимитов клиентов.
     import threading
-    threading.Thread(target=_expiry_loop, daemon=True).start()
+    threading.Thread(target=_check_loop, daemon=True).start()
 
 
 if __name__ == "__main__":

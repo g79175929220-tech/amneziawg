@@ -84,7 +84,8 @@ function icon(path) {
 const ICONS = {
   qr: "M3 3h8v8H3zm2 2v4h4V5zm8-2h8v8h-8zm2 2v4h4V5zM3 13h8v8H3zm2 2v4h4v-4zm8-2h2v2h-2zm2 2h2v2h-2zm-2 2h2v2h-2zm4 0h2v2h-2zm2-4h2v2h-2zm0 4h2v4h-4v-2h2z",
   download: "M5 20h14v-2H5zm7-3 6-6-1.4-1.4L13 13.2V4h-2v9.2L7.4 9.6 6 11z",
-  clock: "M12 2a10 10 0 1 0 0 20 10 10 0 0 0 0-20zm0 18a8 8 0 1 1 0-16 8 8 0 0 1 0 16zm.5-13H11v6l5.2 3.2.8-1.3-4.5-2.7z",
+  limits: "M3 17v2h6v-2zm0-12v2h10V5zm10 16v-2h8v-2h-8v-2h-2v6zM7 9v2H3v2h4v2h2V9zm14 4v-2H11v2zm-6-4h2V7h4V5h-4V3h-2z",
+  link: "M3.9 12c0-1.71 1.39-3.1 3.1-3.1h4V7H7a5 5 0 0 0 0 10h4v-1.9H7c-1.71 0-3.1-1.39-3.1-3.1zM8 13h8v-2H8zm9-6h-4v1.9h4c1.71 0 3.1 1.39 3.1 3.1s-1.39 3.1-3.1 3.1h-4V17h4a5 5 0 0 0 0-10z",
   trash: "M6 19a2 2 0 0 0 2 2h8a2 2 0 0 0 2-2V7H6zM19 4h-3.5l-1-1h-5l-1 1H5v2h14z",
 };
 
@@ -137,8 +138,18 @@ function buildRow(c) {
   const seen = document.createElement("span");
   const exp = document.createElement("span");
   exp.className = "exp";
-  meta.append(ip, seen, exp);
-  info.append(name, meta);
+  const link = document.createElement("span");
+  link.className = "link";
+  meta.append(ip, seen, exp, link);
+  const quota = document.createElement("div");
+  quota.className = "quota";
+  const bar = document.createElement("span");
+  bar.className = "bar";
+  const barFill = document.createElement("i");
+  bar.appendChild(barFill);
+  const quotaText = document.createElement("span");
+  quota.append(bar, quotaText);
+  info.append(name, meta, quota);
 
   const traffic = document.createElement("div");
   traffic.className = "traffic";
@@ -171,12 +182,14 @@ function buildRow(c) {
     sw,
     mk("qr", "QR-код", () => openQR(c.id)),
     mk("download", "Скачать .conf", () => (location.href = `/clients/${c.id}/download`)),
-    mk("clock", "Срок действия", () => openExpire(c.id)),
+    mk("link", "Одноразовая ссылка", () => openShare(c.id)),
+    mk("limits", "Ограничения: срок и трафик", () => openLimits(c.id)),
     mk("trash", "Удалить", () => openDelete(c.id)),
   );
 
   li.append(spark, avatar, info, traffic, actions);
-  return { el: li, avatar, avText, dot, name, ip, seen, exp, tDown, tUp, cb, pDown, pUp,
+  return { el: li, avatar, avText, dot, name, ip, seen, exp, link, quota, barFill, quotaText,
+           tDown, tUp, cb, pDown, pUp,
            prev: null, hist: { down: [], up: [] } };
 }
 
@@ -187,8 +200,22 @@ function updateRow(row, c, now) {
   row.avText.textContent = initials(c.name);
   if (!row.renaming) row.name.textContent = c.name;
   row.ip.textContent = c.ip;
-  row.seen.textContent = c.enabled ? (c.online ? "в сети" : fmtAgo(c.handshake, now)) : "отключён";
-  row.seen.className = c.online ? "on" : "";
+  const REASONS = { limit: "лимит исчерпан", expired: "срок истёк" };
+  row.seen.textContent = c.enabled ? (c.online ? "в сети" : fmtAgo(c.handshake, now))
+                                   : (REASONS[c.disabled_reason] || "отключён");
+  row.seen.className = c.online ? "on" : (REASONS[c.disabled_reason] ? "reason" : "");
+  row.link.textContent = c.share_expires ? "🔗 ссылка активна" : "";
+  row.link.title = c.share_expires ? `Одноразовая ссылка действует до ${new Date(c.share_expires * 1000).toLocaleString("ru-RU")}` : "";
+
+  row.quota.hidden = !c.limit_bytes;
+  if (c.limit_bytes) {
+    const used = c.rx + c.tx, pct = Math.min(100, (used / c.limit_bytes) * 100);
+    row.barFill.style.width = pct.toFixed(1) + "%";
+    row.quota.classList.toggle("warn", pct >= 80 && pct < 100);
+    row.quota.classList.toggle("over", pct >= 100);
+    row.quotaText.textContent = `${fmtBytes(used)} из ${fmtBytes(c.limit_bytes)}` +
+                                (c.limit_period === "month" ? " в месяц" : "");
+  }
 
   row.exp.textContent = "";
   row.exp.classList.remove("warn", "over");
@@ -239,15 +266,18 @@ function render(data) {
     if (!row) { row = buildRow(c); rows.set(c.id, row); }
     updateRow(row, c, now);
     row.el.hidden = !matches(c);
-    if (row.el.parentNode !== listEl) listEl.appendChild(row.el);
     if (c.online) online++;
     rx += c.rx; tx += c.tx;
   }
   for (const [id, row] of rows) {
     if (!seen.has(id)) { row.el.remove(); rows.delete(id); }
   }
-  // Порядок как на сервере (по дате создания).
-  data.clients.forEach((c) => listEl.appendChild(rows.get(c.id).el));
+  // Порядок как на сервере (по дате создания). Узлы двигаем, только если порядок
+  // изменился: лишняя перестановка сбивает фокус (переименование) и hover.
+  data.clients.forEach((c, i) => {
+    const el = rows.get(c.id).el;
+    if (listEl.children[i] !== el) listEl.insertBefore(el, listEl.children[i] || null);
+  });
 
   $("#empty").hidden = data.clients.length > 0;
   $("#st-total").textContent = data.clients.length;
@@ -280,7 +310,7 @@ async function toggle(id, cb) {
   try {
     await api("PATCH", `/api/clients/${id}`, { enabled: cb.checked });
     toast(cb.checked ? "Клиент включён" : "Клиент отключён");
-  } catch (e) { cb.checked = !cb.checked; toast(e.message, true); }
+  } catch (e) { cb.checked = !cb.checked; toast(e.message, true); refresh(); }
 }
 
 function startRename(id, el) {
@@ -326,7 +356,10 @@ $("#form-create").addEventListener("submit", async (e) => {
   e.preventDefault();
   const f = e.target;
   try {
-    const { id } = await api("POST", "/api/clients", { name: f.name.value, expires: f.expires.value });
+    const { id } = await api("POST", "/api/clients", {
+      name: f.name.value, expires: f.expires.value,
+      limit_gb: f.limit_gb.value, limit_period: f.limit_period.value,
+    });
     $("#dlg-create").close();
     toast("Клиент создан");
     await refresh();
@@ -348,23 +381,59 @@ $("#qr-copy").addEventListener("click", async () => {
   catch (e) { toast(e.message, true); }
 });
 
-let expId = null;
-function openExpire(id) {
+let limId = null;
+function openLimits(id) {
   const c = clients.find((x) => x.id === id);
-  expId = id;
-  $("#expire-name").textContent = c.name;
-  $("#form-expire").expires.value = isoDate(c.expires);
-  $("#dlg-expire").showModal();
+  const f = $("#form-limits");
+  limId = id;
+  f.reset();
+  $("#limits-name").textContent = c.name;
+  f.expires.value = isoDate(c.expires);
+  f.limit_gb.value = c.limit_bytes ? +(c.limit_bytes / 1024 ** 3).toFixed(2) : "";
+  f.limit_period.value = c.limit_bytes ? c.limit_period : "month";
+  $("#limits-usage").textContent = `Израсходовано: ${fmtBytes(c.rx + c.tx)} ` +
+    `(↓ ${fmtBytes(c.tx)}, ↑ ${fmtBytes(c.rx)})`;
+  $("#dlg-limits").showModal();
 }
-$("#form-expire").addEventListener("submit", async (e) => {
+$("#form-limits").addEventListener("submit", async (e) => {
   e.preventDefault();
+  const f = e.target;
   try {
-    await api("PATCH", `/api/clients/${expId}`, { expires: e.target.expires.value });
-    $("#dlg-expire").close();
-    toast("Срок действия сохранён");
+    await api("PATCH", `/api/clients/${limId}`, {
+      expires: f.expires.value, limit_gb: f.limit_gb.value,
+      limit_period: f.limit_period.value, reset_usage: f.reset_usage.checked,
+    });
+    $("#dlg-limits").close();
+    toast("Ограничения сохранены");
     refresh();
   } catch (err) { toast(err.message, true); }
 });
+
+let shareId = null;
+function openShare(id) {
+  const c = clients.find((x) => x.id === id);
+  shareId = id;
+  $("#share-name").textContent = c.name;
+  $("#share-form").hidden = false;
+  $("#share-result").hidden = true;
+  $("#share-create").hidden = false;
+  $("#dlg-share").showModal();
+}
+$("#share-create").addEventListener("click", async () => {
+  try {
+    const r = await api("POST", `/api/clients/${shareId}/share`, { ttl: $("#share-ttl").value });
+    $("#share-url").value = r.url;
+    $("#share-exp").textContent = `Действует до ${new Date(r.expires * 1000).toLocaleString("ru-RU")} ` +
+      "или до первого открытия. Сертификат панели самоподписанный — браузер получателя покажет предупреждение.";
+    $("#share-form").hidden = true;
+    $("#share-create").hidden = true;
+    $("#share-result").hidden = false;
+    $("#share-url").select();
+    copy(r.url, "Ссылка создана и скопирована");
+    refresh();
+  } catch (e) { toast(e.message, true); }
+});
+$("#share-copy").addEventListener("click", () => copy($("#share-url").value, "Ссылка скопирована"));
 
 let delId = null;
 function openDelete(id) {

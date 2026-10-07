@@ -43,6 +43,12 @@
     <h3>Новый клиент</h3>
     <label>Имя <input name="name" maxlength="64" required placeholder="например, iphone-ivan" autocomplete="off"></label>
     <label>Действует до <span class="muted">(необязательно)</span><input name="expires" type="date"></label>
+    <div class="field-row">
+      <label>Лимит трафика, ГБ <span class="muted">(необязательно)</span>
+        <input name="limit_gb" type="number" min="0" step="any" placeholder="без лимита"></label>
+      <label>Период <select name="limit_period">
+        <option value="month">в месяц</option><option value="total">всего</option></select></label>
+    </div>
     <div class="modal-actions">
       <button type="button" class="btn" value="cancel" onclick="this.closest('dialog').close()">Отмена</button>
       <button class="btn primary">Создать</button>
@@ -62,18 +68,47 @@
   </div>
 </dialog>
 
-<!-- Срок действия -->
-<dialog id="dlg-expire" class="modal">
-  <form method="dialog" id="form-expire">
-    <h3>Срок действия</h3>
-    <p class="muted small" id="expire-name"></p>
+<!-- Ограничения: срок и лимит трафика -->
+<dialog id="dlg-limits" class="modal">
+  <form method="dialog" id="form-limits">
+    <h3>Ограничения</h3>
+    <p class="muted small" id="limits-name"></p>
     <label>Действует до <input name="expires" type="date"></label>
-    <p class="muted small">Оставьте пустым — бессрочно. По истечении срока клиент отключается автоматически.</p>
+    <div class="field-row">
+      <label>Лимит трафика, ГБ <input name="limit_gb" type="number" min="0" step="any" placeholder="без лимита"></label>
+      <label>Период <select name="limit_period">
+        <option value="month">в месяц</option><option value="total">всего</option></select></label>
+    </div>
+    <p class="muted small" id="limits-usage"></p>
+    <label class="check"><span><input type="checkbox" name="reset_usage"> Сбросить счётчик трафика</span></label>
+    <p class="muted small">Пустые поля — без ограничений. При превышении лимита или по истечении срока
+       клиент отключается автоматически; месячный лимит сбрасывается 1-го числа.</p>
     <div class="modal-actions">
       <button type="button" class="btn" onclick="this.closest('dialog').close()">Отмена</button>
       <button class="btn primary">Сохранить</button>
     </div>
   </form>
+</dialog>
+
+<!-- Одноразовая ссылка -->
+<dialog id="dlg-share" class="modal wide">
+  <h3>Одноразовая ссылка</h3>
+  <p class="muted small" id="share-name"></p>
+  <div id="share-form">
+    <label>Ссылка действует <select id="share-ttl">
+      <option value="1h">1 час</option><option value="24h" selected>24 часа</option><option value="7d">7 дней</option>
+    </select></label>
+    <p class="muted small">Получатель откроет ссылку и один раз увидит QR-код и файл конфигурации.
+       Превью в мессенджерах ссылку не погасят. Новая ссылка отменяет предыдущую.</p>
+  </div>
+  <div id="share-result" hidden>
+    <div class="share-url"><input id="share-url" readonly><button class="btn" id="share-copy">Копировать</button></div>
+    <p class="muted small" id="share-exp"></p>
+  </div>
+  <div class="modal-actions">
+    <button class="btn" onclick="this.closest('dialog').close()">Закрыть</button>
+    <button class="btn primary" id="share-create">Создать ссылку</button>
+  </div>
 </dialog>
 
 <!-- Удаление -->

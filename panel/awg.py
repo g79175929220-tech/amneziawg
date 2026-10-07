@@ -1,4 +1,6 @@
 """Управление AmneziaWG: ключи, конфиги, параметры обфускации, текущий статус."""
+import fcntl
+import hashlib
 import ipaddress
 import json
 import os
@@ -15,7 +17,34 @@ CONF_DIR = os.environ.get("AWG_CONF_DIR", "/etc/awg3")
 # Шаблон systemd-юнита, поднимающего интерфейс ({iface} подставляется).
 SERVICE = os.environ.get("AWG_SERVICE", "awg3-quick@{iface}")
 
-_lock = threading.RLock()
+class _StateLock:
+    """Блокировка state.json: между потоками (RLock) и между процессами (flock),
+    чтобы фоновый учёт трафика и консольные команды не затирали изменения друг друга."""
+
+    def __init__(self):
+        self._rlock = threading.RLock()
+        self._depth = 0
+        self._fd = None
+
+    def __enter__(self):
+        self._rlock.acquire()
+        if self._depth == 0:
+            os.makedirs(STATE_DIR, exist_ok=True)
+            self._fd = os.open(os.path.join(STATE_DIR, ".lock"), os.O_CREAT | os.O_RDWR, 0o600)
+            fcntl.flock(self._fd, fcntl.LOCK_EX)
+        self._depth += 1
+        return self
+
+    def __exit__(self, *exc):
+        self._depth -= 1
+        if self._depth == 0:
+            fcntl.flock(self._fd, fcntl.LOCK_UN)
+            os.close(self._fd)
+            self._fd = None
+        self._rlock.release()
+
+
+_lock = _StateLock()
 
 # Параметры, которые понимает каждая версия протокола.
 #   1 -> AmneziaWG 1.x: Jc/Jmin/Jmax, S1/S2, H1-H4 (одиночные значения)
@@ -237,7 +266,7 @@ def next_ip(state):
     raise RuntimeError("Подсеть заполнена")
 
 
-def add_client(name, expires=None):
+def add_client(name, expires=None, limit_bytes=None, limit_period="total"):
     with _lock:
         state = load()
         priv, pub = genkey()
@@ -251,6 +280,8 @@ def add_client(name, expires=None):
             "enabled": True,
             "created": int(time.time()),
             "expires": expires,
+            "limit_bytes": limit_bytes,
+            "limit_period": limit_period,
         }
         state["clients"].append(c)
         save(state)
@@ -258,40 +289,164 @@ def add_client(name, expires=None):
         return c
 
 
+# ------------------------------------------------------------ учёт трафика
+# Счётчики `awg show` обнуляются при перезапуске интерфейса и при отключении
+# клиента (пир удаляется), поэтому трафик копится в state: usage += прирост.
+
+def _period():
+    return time.strftime("%Y-%m")
+
+
+def _delta(cur, last):
+    return cur - last if cur >= last else cur      # счётчик сбросился
+
+
+def live_usage(c, live):
+    """Накопленный трафик клиента с учётом ещё не сохранённого прироста."""
+    u = c.get("usage", {"rx": 0, "tx": 0})
+    last = c.get("last", {"rx": 0, "tx": 0})
+    st = (live or {}).get(c["public_key"])
+    if not st:
+        return u["rx"], u["tx"]
+    return u["rx"] + _delta(st["rx"], last["rx"]), u["tx"] + _delta(st["tx"], last["tx"])
+
+
+def over_limit(c):
+    u = c.get("usage", {"rx": 0, "tx": 0})
+    return bool(c.get("limit_bytes")) and u["rx"] + u["tx"] >= c["limit_bytes"]
+
+
+def _account(state, live):
+    """Перенести прирост счётчиков в usage, применить срок и лимит.
+    Возвращает True, если поменялся набор включённых клиентов."""
+    now = time.time()
+    period = _period()
+    changed = False
+    for c in state["clients"]:
+        u = c.setdefault("usage", {"rx": 0, "tx": 0})
+        if live is not None:
+            st = live.get(c["public_key"])
+            last = c.get("last", {"rx": 0, "tx": 0})
+            if st:
+                u["rx"] += _delta(st["rx"], last["rx"])
+                u["tx"] += _delta(st["tx"], last["tx"])
+                c["last"] = {"rx": st["rx"], "tx": st["tx"]}
+            else:
+                c["last"] = {"rx": 0, "tx": 0}
+        # Месячный лимит: в новом месяце счётчик обнуляется.
+        if c.get("limit_period") == "month" and c.get("period") != period:
+            if c.get("period"):
+                c["usage"] = u = {"rx": 0, "tx": 0}
+                if not c["enabled"] and c.get("disabled_reason") == "limit":
+                    c["enabled"], c["disabled_reason"] = True, None
+                    changed = True
+            c["period"] = period
+        if c["enabled"] and c.get("expires") and c["expires"] < now:
+            c["enabled"], c["disabled_reason"] = False, "expired"
+            changed = True
+        elif c["enabled"] and over_limit(c):
+            c["enabled"], c["disabled_reason"] = False, "limit"
+            changed = True
+    return changed
+
+
+def check():
+    """Периодическая проверка: учёт трафика, сроки, лимиты."""
+    with _lock:
+        state = load()
+        changed = _account(state, status(state))
+        save(state)
+        if changed:
+            apply(state)
+
+
 def update_client(cid, **fields):
     with _lock:
         state = load()
+        # Сначала учесть трафик: при отключении пир удаляется вместе со счётчиками.
+        _account(state, status(state))
         for c in state["clients"]:
             if c["id"] == cid:
+                if fields.pop("reset_usage", False):
+                    c["usage"] = {"rx": 0, "tx": 0}
                 c.update(fields)
+                if "enabled" in fields:
+                    c["disabled_reason"] = None if c["enabled"] else "manual"
+                elif (not c["enabled"] and c.get("disabled_reason") in ("expired", "limit")
+                      and not over_limit(c)
+                      and not (c.get("expires") and c["expires"] < time.time())):
+                    # Ограничение сняли (продлили срок, подняли лимит, сбросили счётчик).
+                    c["enabled"], c["disabled_reason"] = True, None
+                # Отказываем только при явном включении; если лимит или срок просто
+                # ужесточили, клиент отключится ниже в _account().
+                if fields.get("enabled") and over_limit(c):
+                    raise ValueError("Лимит трафика исчерпан — увеличьте лимит или сбросьте счётчик")
+                if fields.get("enabled") and c.get("expires") and c["expires"] < time.time():
+                    raise ValueError("Срок действия истёк — продлите его")
                 break
         else:
             raise KeyError(cid)
+        _account(state, None)
         save(state)
         apply(state)
-
-
-def enforce_expiry():
-    """Отключить клиентов с истёкшим сроком действия."""
-    with _lock:
-        state = load()
-        now = time.time()
-        changed = False
-        for c in state["clients"]:
-            if c["enabled"] and c.get("expires") and c["expires"] < now:
-                c["enabled"] = False
-                changed = True
-        if changed:
-            save(state)
-            apply(state)
 
 
 def delete_client(cid):
     with _lock:
         state = load()
         state["clients"] = [c for c in state["clients"] if c["id"] != cid]
+        state["shares"] = {k: v for k, v in state.get("shares", {}).items() if v["cid"] != cid}
         save(state)
         apply(state)
+
+
+# ------------------------------------------------------------ одноразовые ссылки
+# В state хранится только SHA-256 токена, сам токен знает лишь получатель ссылки.
+
+def _token_hash(token):
+    return hashlib.sha256(token.encode()).hexdigest()
+
+
+def create_share(cid, ttl):
+    with _lock:
+        state = load()
+        if not any(c["id"] == cid for c in state["clients"]):
+            raise KeyError(cid)
+        now = int(time.time())
+        # Новая ссылка отменяет прежние для этого клиента; заодно чистим просроченные.
+        shares = {k: v for k, v in state.get("shares", {}).items()
+                  if v["cid"] != cid and v["expires"] > now}
+        token = secrets.token_urlsafe(24)
+        shares[_token_hash(token)] = {"cid": cid, "created": now, "expires": now + int(ttl)}
+        state["shares"] = shares
+        save(state)
+        return token, now + int(ttl)
+
+
+def share_info(token):
+    """Клиент по действующей ссылке (без погашения) или None."""
+    state = load()
+    sh = state.get("shares", {}).get(_token_hash(token))
+    if not sh or sh["expires"] < time.time():
+        return None
+    return next((c for c in state["clients"] if c["id"] == sh["cid"]), None)
+
+
+def redeem_share(token):
+    """Погасить ссылку и вернуть (state, client) либо None."""
+    with _lock:
+        state = load()
+        sh = state.get("shares", {}).pop(_token_hash(token), None)
+        if not sh or sh["expires"] < time.time():
+            return None
+        save(state)
+        c = next((c for c in state["clients"] if c["id"] == sh["cid"]), None)
+        return (state, c) if c else None
+
+
+def active_shares(state):
+    now = time.time()
+    return {v["cid"]: v["expires"] for v in state.get("shares", {}).values() if v["expires"] > now}
 
 
 def status(state):

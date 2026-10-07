@@ -1,0 +1,44 @@
+{% extends "base.html" %}
+{% block body %}
+<div class="card share">
+{% if not c %}
+  <h1>Ссылка недействительна</h1>
+  <p class="muted">Ссылка уже была использована или срок её действия истёк.
+     Попросите администратора прислать новую.</p>
+{% elif not conf %}
+  <h1>Настройка VPN</h1>
+  <p>Конфигурация для <b>{{ c.name }}</b>.</p>
+  <p class="muted small">Ссылка одноразовая: после нажатия кнопки конфигурация будет показана один раз,
+     повторно открыть её не получится. Сохраните файл или отсканируйте QR-код сразу.</p>
+  <form method="post">
+    <button class="btn primary">Получить конфигурацию</button>
+  </form>
+{% else %}
+  <h1>{{ c.name }}</h1>
+  <div class="flash err">Ссылка погашена — эта страница больше не откроется. Сохраните конфигурацию сейчас.</div>
+  <ol class="steps">
+    <li>Установите приложение <b>AmneziaVPN</b> или <b>AmneziaWG</b> (с поддержкой AmneziaWG 3.x).</li>
+    <li>Отсканируйте QR-код или импортируйте файл конфигурации.</li>
+  </ol>
+  <div class="qr-box">{{ qr|safe }}</div>
+  <div class="modal-actions">
+    <button class="btn" id="copy">Копировать</button>
+    <button class="btn primary" id="download">Скачать {{ fname }}.conf</button>
+  </div>
+  <details><summary>Показать текст конфигурации</summary><pre id="conf">{{ conf }}</pre></details>
+  <script>
+    const conf = document.getElementById("conf").textContent;
+    document.getElementById("download").addEventListener("click", () => {
+      const a = document.createElement("a");
+      a.href = URL.createObjectURL(new Blob([conf], { type: "text/plain" }));
+      a.download = {{ (fname ~ ".conf")|tojson }};
+      a.click();
+    });
+    document.getElementById("copy").addEventListener("click", async (e) => {
+      try { await navigator.clipboard.writeText(conf); e.target.textContent = "Скопировано"; }
+      catch { e.target.textContent = "Не удалось"; }
+    });
+  </script>
+{% endif %}
+</div>
+{% endblock %}
