@@ -8,10 +8,19 @@
 ssh root@<IP_СЕРВЕРА>
 git clone -b claude/amnesiawg-web-panel-1kuz00 https://github.com/g79175929220-tech/amneziawg.git
 cd amneziawg
-sudo bash install.sh            # опции: --port 51820 --panel-port 8443 --endpoint <IP> --proto 2|1
+sudo bash install.sh   # опции: --port --panel-port --endpoint --proto 2|1 --iface --subnet
 ```
 
 В конце скрипт выведет адрес панели (`https://<IP>:8443`), логин `admin` и сгенерированный пароль.
+
+### Установка рядом с уже работающим AmneziaWG
+
+Можно ставить на сервер, где уже работает AmneziaWG (например, 2.0 — на хосте или в Docker-контейнере
+приложения AmneziaVPN). Скрипт:
+- не переустанавливает пакеты AmneziaWG, если они уже есть;
+- не трогает существующие интерфейсы (`awg0`, `wg0`, контейнеры `amnezia-*`);
+- сам берёт свободные интерфейс (`awg1`, …), UDP-порт и подсеть (`10.9.0.0/24`, …);
+- можно задать вручную: `--iface awg1 --port 51821 --subnet 10.20.0.0/24`.
 
 Что делает `install.sh`:
 1. Ставит `amneziawg` (модуль ядра, DKMS) и `amneziawg-tools` из PPA Amnezia.

@@ -252,6 +252,7 @@ def cli():
     i.add_argument("--subnet", default="10.8.0.0/24")
     i.add_argument("--dns", default="1.1.1.1, 1.0.0.1")
     i.add_argument("--proto", type=int, default=2, choices=[1, 2])
+    i.add_argument("--iface", default="awg0")
     i.add_argument("--force", action="store_true")
     sp = sub.add_parser("set-proto", help="сменить версию протокола и перегенерировать обфускацию")
     sp.add_argument("proto", type=int, choices=[1, 2])
@@ -265,7 +266,7 @@ def cli():
         if os.path.exists(awg.STATE_FILE) and not a.force:
             print("Конфигурация уже существует, оставляю её")
         else:
-            awg.init_state(a.endpoint, a.port, a.wan, a.subnet, a.dns, a.proto)
+            awg.init_state(a.endpoint, a.port, a.wan, a.subnet, a.dns, a.proto, a.iface)
         awg.write_conf(awg.load())
     elif a.cmd == "set-proto":
         state = awg.load()

@@ -1,18 +1,25 @@
 #!/usr/bin/env bash
 # Установщик сервера AmneziaWG и веб-панели (Ubuntu 20.04+ / Debian 11+).
 # Запуск: sudo bash install.sh [--port 51820] [--panel-port 8443] [--endpoint IP] [--proto 2|1]
+#                              [--iface awg0] [--subnet 10.8.0.0/24]
+# Можно ставить рядом с уже работающим AmneziaWG: если интерфейс, порт или подсеть
+# заняты, скрипт сам подберёт свободные (awg1, следующий порт, 10.9.0.0/24 и т.д.).
 set -euo pipefail
 
 AWG_PORT=51820
 PANEL_PORT=8443
 ENDPOINT=""
 PROTO=2
-IFACE=awg0
+IFACE=""
+SUBNET=""
+USER_PORT=0
 SRC_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
-    --port) AWG_PORT="$2"; shift 2 ;;
+    --port) AWG_PORT="$2"; USER_PORT=1; shift 2 ;;
+    --iface) IFACE="$2"; shift 2 ;;
+    --subnet) SUBNET="$2"; shift 2 ;;
     --panel-port) PANEL_PORT="$2"; shift 2 ;;
     --endpoint) ENDPOINT="$2"; shift 2 ;;
     --proto) PROTO="$2"; shift 2 ;;
@@ -72,13 +79,72 @@ install_tools_from_source() {
   make -C /tmp/amneziawg-tools/src install WITH_WGQUICK=yes WITH_SYSTEMDUNITS=yes
 }
 
-log "Установка AmneziaWG"
-install_ppa || warn "Не удалось подключить PPA"
-apt-get install -y amneziawg amneziawg-tools || apt-get install -y amneziawg-tools || true
-command -v awg >/dev/null || install_tools_from_source
-if ! modprobe amneziawg 2>/dev/null; then
-  install_go_userspace
+udp_busy() { ss -Huln "sport = :$1" | grep -q .; }
+tcp_busy() { ss -Htln "sport = :$1" | grep -q .; }
+
+if command -v awg >/dev/null && { modprobe amneziawg 2>/dev/null || command -v amneziawg-go >/dev/null; }; then
+  # AmneziaWG уже стоит (например, работает 2.0) — пакеты не трогаем, чтобы не задеть рабочий туннель.
+  log "AmneziaWG уже установлен ($(awg --version 2>/dev/null | head -1)), переустановку пропускаю"
+else
+  log "Установка AmneziaWG"
+  install_ppa || warn "Не удалось подключить PPA"
+  apt-get install -y amneziawg amneziawg-tools || apt-get install -y amneziawg-tools || true
+  command -v awg >/dev/null || install_tools_from_source
+  if ! modprobe amneziawg 2>/dev/null; then
+    install_go_userspace
+  fi
 fi
+
+log "Проверка, что не мешаем существующим туннелям"
+if command -v docker >/dev/null && docker ps --format '{{.Names}}' 2>/dev/null | grep -qi amnezia; then
+  warn "Найдены Docker-контейнеры Amnezia: $(docker ps --format '{{.Names}}' | grep -i amnezia | tr '\n' ' ')— они продолжат работать"
+fi
+for ifc in $(ip -o link show | awk -F': ' '{print $2}' | cut -d@ -f1 | grep -E '^(awg|wg|amn)'); do
+  warn "Уже есть интерфейс $ifc — его не трогаю"
+done
+
+if [[ -z "$IFACE" ]]; then
+  # Если awg0 уже наш (повторный запуск) — оставляем его.
+  if [[ -f /etc/awg-panel/state.json ]]; then
+    IFACE=$(python3 -c 'import json;print(json.load(open("/etc/awg-panel/state.json"))["server"]["iface"])')
+  else
+    i=0; while ip link show "awg$i" >/dev/null 2>&1 || [[ -f "/etc/amnezia/amneziawg/awg$i.conf" ]]; do i=$((i+1)); done
+    IFACE="awg$i"
+  fi
+elif [[ ! -f /etc/awg-panel/state.json ]] && { ip link show "$IFACE" >/dev/null 2>&1 || [[ -f "/etc/amnezia/amneziawg/$IFACE.conf" ]]; }; then
+  echo "Интерфейс $IFACE уже занят другим туннелем. Укажите другой: --iface awg1"; exit 1
+fi
+
+if [[ ! -f /etc/awg-panel/state.json ]]; then
+  if udp_busy "$AWG_PORT"; then
+    if [[ $USER_PORT == 1 ]]; then echo "UDP-порт $AWG_PORT уже занят"; exit 1; fi
+    while udp_busy "$AWG_PORT"; do AWG_PORT=$((AWG_PORT+1)); done
+    warn "UDP-порт занят, беру свободный: $AWG_PORT"
+  fi
+  # Подсеть, не пересекающаяся с адресами и маршрутами сервера.
+  SUBNET=$(python3 - "$SUBNET" <<'PY'
+import ipaddress, subprocess, sys
+used = []
+for cmd in (["ip", "-4", "-o", "addr"], ["ip", "-4", "route"]):
+    for tok in subprocess.run(cmd, capture_output=True, text=True).stdout.split():
+        try:
+            used.append(ipaddress.ip_network(tok, strict=False))
+        except ValueError:
+            pass
+used = [n for n in used if n.prefixlen > 0]
+want = sys.argv[1]
+cands = [want] if want else [f"10.{i}.0.0/24" for i in range(8, 250)]
+for c in cands:
+    net = ipaddress.ip_network(c, strict=False)
+    if not any(net.overlaps(u) for u in used):
+        print(net); break
+else:
+    sys.exit("Подсеть %s пересекается с существующей" % want if want else "Нет свободной подсети")
+PY
+)
+fi
+while tcp_busy "$PANEL_PORT" && ! systemctl is-active -q awg-panel; do PANEL_PORT=$((PANEL_PORT+1)); done
+log "Новый туннель: интерфейс $IFACE, UDP $AWG_PORT, подсеть ${SUBNET:-из прежней конфигурации}, панель :$PANEL_PORT"
 
 log "Включение пересылки IP-пакетов"
 cat > /etc/sysctl.d/99-amneziawg.conf <<SYSCTL
@@ -100,7 +166,8 @@ python3 -m venv /opt/awg-panel/venv
 /opt/awg-panel/venv/bin/pip install -q -r /opt/awg-panel/requirements.txt
 PANEL_PY="/opt/awg-panel/venv/bin/python /opt/awg-panel/app.py"
 
-$PANEL_PY init --endpoint "$ENDPOINT" --port "$AWG_PORT" --wan "$WAN" --proto "$PROTO"
+$PANEL_PY init --endpoint "$ENDPOINT" --port "$AWG_PORT" --wan "$WAN" --proto "$PROTO" \
+  --iface "$IFACE" ${SUBNET:+--subnet "$SUBNET"}
 
 log "Запуск awg-quick@$IFACE"
 systemctl enable "awg-quick@$IFACE" >/dev/null 2>&1 || true
@@ -131,7 +198,8 @@ if [[ ! -f /etc/awg-panel/tls.crt ]]; then
   chmod 600 /etc/awg-panel/tls.key
 fi
 
-echo "PANEL_BIND=0.0.0.0:$PANEL_PORT" > /etc/awg-panel/panel.env
+[[ -f /etc/awg-panel/panel.env ]] && systemctl is-active -q awg-panel || echo "PANEL_BIND=0.0.0.0:$PANEL_PORT" > /etc/awg-panel/panel.env
+PANEL_PORT=$(sed -n "s/.*://p" /etc/awg-panel/panel.env)
 install -m 0644 "$SRC_DIR/systemd/awg-panel.service" /etc/systemd/system/awg-panel.service
 systemctl daemon-reload
 systemctl enable --now awg-panel
