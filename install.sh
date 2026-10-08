@@ -179,7 +179,6 @@ fi
 log "Включение пересылки IP-пакетов"
 cat > /etc/sysctl.d/99-amneziawg.conf <<SYSCTL
 net.ipv4.ip_forward = 1
-net.ipv6.conf.all.forwarding = 1
 SYSCTL
 sysctl --system >/dev/null
 

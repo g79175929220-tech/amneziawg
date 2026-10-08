@@ -177,6 +177,8 @@ def obfs_lines(srv, client=False):
 def server_conf(state):
     s = state["server"]
     sub, wan, ifc = s["subnet"], s["wan"], s["iface"]
+    # Правила FORWARD вставляются в начало цепочки (-I): Docker ставит политику DROP
+    # и держит свои цепочки сверху, правила в конце могут не сработать.
     lines = [
         "# Управляется awg-panel. Ручные правки будут перезаписаны.",
         "[Interface]",
@@ -186,7 +188,7 @@ def server_conf(state):
         f"MTU = {s['mtu']}",
         *obfs_lines(s),
         f"PostUp = iptables -t nat -A POSTROUTING -s {sub} -o {wan} -j MASQUERADE; "
-        f"iptables -A FORWARD -i {ifc} -j ACCEPT; iptables -A FORWARD -o {ifc} -j ACCEPT",
+        f"iptables -I FORWARD -i {ifc} -j ACCEPT; iptables -I FORWARD -o {ifc} -j ACCEPT",
         f"PostDown = iptables -t nat -D POSTROUTING -s {sub} -o {wan} -j MASQUERADE; "
         f"iptables -D FORWARD -i {ifc} -j ACCEPT; iptables -D FORWARD -o {ifc} -j ACCEPT",
     ]
