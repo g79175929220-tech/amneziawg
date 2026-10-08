@@ -62,6 +62,16 @@ WAN=$(ip -4 route show default | awk '{for(i=1;i<=NF;i++) if($i=="dev"){print $(
 if ss -Huln "sport = :$LISTEN_PORT" | grep -q .; then
   die "UDP-порт $LISTEN_PORT на этом сервере уже занят — выберите другой: --port 51821"
 fi
+# Порты уже работающих WireGuard/AmneziaWG на этом сервере — их не перехватываем.
+for tool in wg awg; do
+  command -v $tool >/dev/null || continue
+  if $tool show all listen-port 2>/dev/null | awk '{print $2}' | grep -qx "$LISTEN_PORT"; then
+    die "UDP-порт $LISTEN_PORT занят туннелем $tool ($($tool show all listen-port | awk -v p=$LISTEN_PORT '$2==p{print $1}')) — выберите другой, например --port 8443"
+  fi
+done
+if ip -4 -o addr | awk '{sub(/\/.*/,"",$4); print $4}' | grep -qx "$EXIT_IP"; then
+  die "$EXIT_IP — это адрес самого этого сервера. В --exit укажите выходной сервер с AmneziaWG"
+fi
 
 log "Пересылка UDP :$LISTEN_PORT ($WAN) → $EXIT_IP:$EXIT_PORT"
 cat > $CONF <<EOF
