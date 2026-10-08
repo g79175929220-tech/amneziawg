@@ -69,6 +69,11 @@ for tool in wg awg; do
     die "UDP-порт $LISTEN_PORT занят туннелем $tool ($($tool show all listen-port | awk -v p=$LISTEN_PORT '$2==p{print $1}')) — выберите другой, например --port 8443"
   fi
 done
+# Порты, опубликованные Docker (Amnezia ставит WireGuard/AWG в контейнеры). Проверяем
+# правила DNAT Docker — они есть, даже если docker-proxy отключён и ss порт не видит.
+if iptables -t nat -S DOCKER 2>/dev/null | grep -E -- "-p udp" | grep -qE -- "--dport $LISTEN_PORT( |\$)"; then
+  die "UDP-порт $LISTEN_PORT опубликован Docker-контейнером ($(docker ps --format '{{.Names}} {{.Ports}}' 2>/dev/null | grep -E ":$LISTEN_PORT->" | awk '{print $1}' | tr '\n' ' ')) — выберите другой, например --port 8443"
+fi
 if ip -4 -o addr | awk '{sub(/\/.*/,"",$4); print $4}' | grep -qx "$EXIT_IP"; then
   die "$EXIT_IP — это адрес самого этого сервера. В --exit укажите выходной сервер с AmneziaWG"
 fi
