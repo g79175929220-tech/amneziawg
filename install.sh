@@ -41,6 +41,9 @@ warn() { echo -e "\e[1;33m!!\e[0m $*"; }
 [[ -c /dev/net/tun ]] || { echo "Нет /dev/net/tun — включите TUN/TAP в панели хостинга"; exit 1; }
 
 export DEBIAN_FRONTEND=noninteractive
+# needrestart в Ubuntu 22.04+ после apt сам перезапускает службы с обновлёнными
+# библиотеками — в т.ч. Docker с контейнерами AmneziaWG 2.0. Только выводим список.
+export NEEDRESTART_MODE=l NEEDRESTART_SUSPEND=1
 STATE=/etc/awg-panel/state.json
 
 log "Установка базовых пакетов"
