@@ -9,6 +9,7 @@ const $ = (sel, root = document) => root.querySelector(sel);
 const listEl = $("#clients");
 const rows = new Map();      // id -> {el, prev, hist}
 let clients = [];
+let cascade = null;          // адрес входного сервера каскада, если настроен
 let filter = "";
 
 // ---------------------------------------------------------------- утилиты
@@ -204,7 +205,8 @@ function updateRow(row, c, now) {
   row.seen.textContent = c.enabled ? (c.online ? "в сети" : fmtAgo(c.handshake, now))
                                    : (REASONS[c.disabled_reason] || "отключён");
   row.seen.className = c.online ? "on" : (REASONS[c.disabled_reason] ? "reason" : "");
-  row.link.textContent = c.share_expires ? "🔗 ссылка активна" : "";
+  row.link.textContent = (c.via === "cascade" && cascade ? "⇄ каскад  " : "") +
+                         (c.share_expires ? "🔗 ссылка активна" : "");
   row.link.title = c.share_expires ? `Одноразовая ссылка действует до ${new Date(c.share_expires * 1000).toLocaleString("ru-RU")}` : "";
 
   row.quota.hidden = !c.limit_bytes;
@@ -293,6 +295,7 @@ async function poll() {
   try {
     const data = await api("GET", "/api/clients");
     clients = data.clients;
+    cascade = data.cascade;
     render(data);
   } catch (e) {
     if (e.message !== "auth") $("#srv-status").textContent = "нет связи";
@@ -357,7 +360,7 @@ $("#form-create").addEventListener("submit", async (e) => {
   const f = e.target;
   try {
     const { id } = await api("POST", "/api/clients", {
-      name: f.name.value, expires: f.expires.value,
+      name: f.name.value, expires: f.expires.value, via: f.via ? f.via.value : "direct",
       limit_gb: f.limit_gb.value, limit_period: f.limit_period.value,
     });
     $("#dlg-create").close();
@@ -368,10 +371,28 @@ $("#form-create").addEventListener("submit", async (e) => {
 });
 
 let qrId = null;
+function showRoute(via) {
+  $("#qr-route").hidden = !cascade;
+  $("#qr-route").querySelectorAll("button").forEach((b) =>
+    b.classList.toggle("active", b.dataset.via === via));
+}
+$("#qr-route").addEventListener("click", async (e) => {
+  const via = e.target.dataset && e.target.dataset.via;
+  if (!via) return;
+  try {
+    await api("PATCH", `/api/clients/${qrId}`, { via });
+    showRoute(via);
+    $("#qr-img").src = `/api/clients/${qrId}/qr.svg?t=${Date.now()}`;
+    toast(via === "cascade" ? "Маршрут: через каскад. Обновите конфиг на устройстве"
+                            : "Маршрут: напрямую. Обновите конфиг на устройстве");
+    refresh();
+  } catch (err) { toast(err.message, true); }
+});
 function openQR(id) {
   const c = clients.find((x) => x.id === id);
   qrId = id;
   $("#qr-title").textContent = c ? c.name : "";
+  showRoute(c && c.via === "cascade" ? "cascade" : "direct");
   $("#qr-img").src = `/api/clients/${id}/qr.svg?t=${Date.now()}`;
   $("#qr-download").href = `/clients/${id}/download`;
   $("#dlg-qr").showModal();
@@ -454,6 +475,7 @@ $("#del-confirm").addEventListener("click", async () => {
 async function refresh() {
   const data = await api("GET", "/api/clients");
   clients = data.clients;
+  cascade = data.cascade;
   render(data);
 }
 

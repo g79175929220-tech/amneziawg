@@ -4,7 +4,8 @@
   <div class="server-head">
     <div>
       <h1>{{ s.endpoint }}<span class="muted">:{{ s.port }}</span></h1>
-      <div class="muted small">Интерфейс <code>{{ s.iface }}</code> · подсеть <code>{{ s.subnet }}</code></div>
+      <div class="muted small">Интерфейс <code>{{ s.iface }}</code> · подсеть <code>{{ s.subnet }}</code>
+        {% if s.cascade %} · каскад через <code>{{ s.cascade }}</code>{% endif %}</div>
     </div>
     <div class="chips">
       <span class="chip accent">AmneziaWG {{ s.proto }}.x</span>
@@ -49,6 +50,12 @@
       <label>Период <select name="limit_period">
         <option value="month">в месяц</option><option value="total">всего</option></select></label>
     </div>
+    {% if s.cascade %}
+    <label>Маршрут <select name="via">
+      <option value="direct">Напрямую — {{ s.endpoint }}:{{ s.port }}</option>
+      <option value="cascade">Через каскад — {{ s.cascade }} (для мобильного интернета)</option>
+    </select></label>
+    {% endif %}
     <div class="modal-actions">
       <button type="button" class="btn" value="cancel" onclick="this.closest('dialog').close()">Отмена</button>
       <button class="btn primary">Создать</button>
@@ -59,6 +66,10 @@
 <!-- QR / конфиг -->
 <dialog id="dlg-qr" class="modal wide">
   <h3 id="qr-title"></h3>
+  <div class="segmented" id="qr-route" hidden>
+    <button type="button" data-via="direct">Напрямую</button>
+    <button type="button" data-via="cascade">Через каскад</button>
+  </div>
   <div class="qr-box"><img id="qr-img" alt="QR-код конфигурации"></div>
   <p class="muted small center">Отсканируйте в приложении AmneziaVPN или AmneziaWG</p>
   <div class="modal-actions">

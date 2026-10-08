@@ -203,3 +203,8 @@ details summary { cursor: pointer; color: var(--muted); }
 .share-url input { flex: 1; font: 13px ui-monospace, monospace; }
 label.check { flex-direction: row; color: var(--fg); font-size: 14px; }
 label.check span { display: flex; align-items: center; gap: 8px; }
+
+/* ---------- переключатель маршрута */
+.segmented { display: flex; padding: 3px; gap: 3px; background: var(--soft); border-radius: 10px; margin-bottom: 12px; }
+.segmented button { flex: 1; justify-content: center; border: 0; background: transparent; color: var(--muted); padding: 6px 10px; }
+.segmented button.active { background: var(--card); color: var(--fg); box-shadow: var(--shadow); font-weight: 600; }

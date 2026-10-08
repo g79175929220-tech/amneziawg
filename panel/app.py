@@ -4,6 +4,7 @@ import hmac
 import io
 import json
 import os
+import re
 import secrets
 import sys
 import time
@@ -179,8 +180,10 @@ def api_clients():
             "endpoint": st.get("endpoint", ""),
             "online": c["enabled"] and bool(hs) and now - hs < 180,
             "share_expires": shares.get(c["id"]),
+            "via": c.get("via", "direct"),
         })
-    return {"up": live is not None, "now": int(now), "clients": out}
+    return {"up": live is not None, "now": int(now), "clients": out,
+            "cascade": state["server"].get("cascade") or None}
 
 
 @app.post("/api/clients")
@@ -190,9 +193,10 @@ def api_create():
     if not name:
         return {"error": "Укажите имя клиента"}, 400
     limit, period = _parse_limit(data)
+    via = "cascade" if data.get("via") == "cascade" else "direct"
     try:
         c = awg.add_client(name, expires=_parse_expires(data.get("expires")),
-                           limit_bytes=limit, limit_period=period)
+                           limit_bytes=limit, limit_period=period, via=via)
     except Exception as e:  # noqa: BLE001
         return {"error": str(e)}, 500
     return {"id": c["id"]}
@@ -216,6 +220,8 @@ def api_update(cid):
         fields["limit_bytes"], fields["limit_period"] = _parse_limit(data)
     if data.get("reset_usage"):
         fields["reset_usage"] = True
+    if "via" in data:
+        fields["via"] = "cascade" if data["via"] == "cascade" else "direct"
     try:
         awg.update_client(cid, **fields)
     except ValueError as e:
@@ -315,6 +321,10 @@ def _settings():
         try:
             if action == "server":
                 s["endpoint"] = request.form["endpoint"].strip()
+                cascade = request.form.get("cascade", "").strip()
+                if cascade and not re.fullmatch(r"[A-Za-z0-9.-]+:\d{1,5}", cascade):
+                    raise ValueError("Адрес каскада укажите как IP:порт, например 95.163.1.2:443")
+                s["cascade"] = cascade
                 s["dns"] = request.form["dns"].strip()
                 s["mtu"] = int(request.form["mtu"])
                 s["keepalive"] = int(request.form["keepalive"])

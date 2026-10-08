@@ -202,6 +202,14 @@ def server_conf(state):
     return "\n".join(lines) + "\n"
 
 
+def client_endpoint(state, c):
+    """Адрес, к которому подключается клиент: напрямую или через входной сервер каскада."""
+    s = state["server"]
+    if c.get("via") == "cascade" and s.get("cascade"):
+        return s["cascade"]
+    return f"{s['endpoint']}:{s['port']}"
+
+
 def client_conf(state, c):
     s = state["server"]
     lines = [
@@ -215,7 +223,7 @@ def client_conf(state, c):
         "[Peer]",
         f"PublicKey = {s['public_key']}",
         f"PresharedKey = {c['psk']}",
-        f"Endpoint = {s['endpoint']}:{s['port']}",
+        f"Endpoint = {client_endpoint(state, c)}",
         "AllowedIPs = 0.0.0.0/0, ::/0",
         f"PersistentKeepalive = {s['keepalive']}",
     ]
@@ -268,7 +276,7 @@ def next_ip(state):
     raise RuntimeError("Подсеть заполнена")
 
 
-def add_client(name, expires=None, limit_bytes=None, limit_period="total"):
+def add_client(name, expires=None, limit_bytes=None, limit_period="total", via="direct"):
     with _lock:
         state = load()
         priv, pub = genkey()
@@ -284,6 +292,7 @@ def add_client(name, expires=None, limit_bytes=None, limit_period="total"):
             "expires": expires,
             "limit_bytes": limit_bytes,
             "limit_period": limit_period,
+            "via": via,
         }
         state["clients"].append(c)
         save(state)
