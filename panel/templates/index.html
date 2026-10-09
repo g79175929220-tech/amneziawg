@@ -26,6 +26,12 @@
     <h2>Клиенты</h2>
     <div class="list-tools">
       <input type="search" id="search" placeholder="Поиск по имени или IP">
+      <select id="sort" title="Сортировка" aria-label="Сортировка">
+        <option value="created">Сначала старые</option>
+        <option value="expires">По окончанию срока</option>
+        <option value="name">По имени</option>
+        <option value="traffic">По трафику</option>
+      </select>
       <button class="btn primary" id="btn-new">
         <svg viewBox="0 0 24 24"><path d="M11 5h2v6h6v2h-6v6h-2v-6H5v-2h6z" fill="currentColor"/></svg>
         Новый клиент

@@ -240,7 +240,11 @@ function updateRow(row, c, now) {
   row.exp.classList.remove("warn", "over");
   if (c.expires) {
     const left = c.expires - now;
-    row.exp.textContent = left > 0 ? `до ${fmtDay(c.expires_date)}` : "срок истёк";
+    // Календарные дни до даты окончания — так же, как в калькуляторе дат.
+    const days = Math.round((parseISO(c.expires_date) - today()) / DAY);
+    row.exp.textContent = left <= 0 ? "срок истёк"
+      : days <= 0 ? `до ${fmtDay(c.expires_date)} · последний день`
+      : `до ${fmtDay(c.expires_date)} · ${days} ${plural(days, "день", "дня", "дней")}`;
     if (left <= 0) row.exp.classList.add("over");
     else if (left < 3 * 86400) row.exp.classList.add("warn");
   }
@@ -275,7 +279,27 @@ function matches(c) {
   return c.name.toLowerCase().includes(filter) || c.ip.includes(filter);
 }
 
+// ---------------------------------------------------------------- сортировка
+let sortBy = "created";
+try { sortBy = localStorage.getItem("sort") || "created"; } catch {}
+const collator = new Intl.Collator("ru", { sensitivity: "base", numeric: true });
+
+function sortClients(list) {
+  const arr = list.slice();     // исходный порядок с сервера — по дате создания
+  if (sortBy === "expires") {
+    // Ближайшие отключения сверху (истёкшие — первыми), бессрочные — в конце.
+    arr.sort((a, b) => (a.expires || Infinity) - (b.expires || Infinity) || collator.compare(a.name, b.name));
+  } else if (sortBy === "name") {
+    arr.sort((a, b) => collator.compare(a.name, b.name));
+  } else if (sortBy === "traffic") {
+    arr.sort((a, b) => (b.rx + b.tx) - (a.rx + a.tx));
+  }
+  return arr;
+}
+
+let lastData = null;
 function render(data) {
+  lastData = data;
   const now = data.now;
   const seen = new Set();
   let online = 0, rx = 0, tx = 0;
@@ -291,9 +315,9 @@ function render(data) {
   for (const [id, row] of rows) {
     if (!seen.has(id)) { row.el.remove(); rows.delete(id); }
   }
-  // Порядок как на сервере (по дате создания). Узлы двигаем, только если порядок
+  // Порядок — по выбранной сортировке. Узлы двигаем, только если порядок
   // изменился: лишняя перестановка сбивает фокус (переименование) и hover.
-  data.clients.forEach((c, i) => {
+  sortClients(data.clients).forEach((c, i) => {
     const el = rows.get(c.id).el;
     if (listEl.children[i] !== el) listEl.insertBefore(el, listEl.children[i] || null);
   });
@@ -555,6 +579,12 @@ async function refresh() {
 }
 
 $("#btn-new").addEventListener("click", openCreate);
+$("#sort").value = sortBy;
+$("#sort").addEventListener("change", (e) => {
+  sortBy = e.target.value;
+  try { localStorage.setItem("sort", sortBy); } catch {}
+  if (lastData) render(lastData);
+});
 $("#search").addEventListener("input", (e) => {
   filter = e.target.value.trim().toLowerCase();
   clients.forEach((c) => { const r = rows.get(c.id); if (r) r.el.hidden = !matches(c); });
