@@ -224,3 +224,28 @@ label.check span { display: flex; align-items: center; gap: 8px; }
                      border-radius: 9px; background: var(--soft); color: var(--fg); }
 @media (max-width: 720px) { .list-tools select { flex: 1; } }
 .presets button.trial { border-style: dashed; }
+
+/* ---------- группы клиентов */
+.tabs { display: flex; gap: 4px; overflow-x: auto; margin: 4px 0 10px; padding-bottom: 2px; scrollbar-width: none; }
+.tabs button { flex: none; border: 0; border-radius: 99px; padding: 6px 12px; font-size: 13px;
+               background: transparent; color: var(--muted); }
+.tabs button span { margin-left: 4px; padding: 0 7px; border-radius: 99px; background: var(--soft);
+                    font-size: 12px; font-variant-numeric: tabular-nums; }
+.tabs button:hover { background: var(--soft); color: var(--fg); }
+.tabs button.active { background: var(--acc-soft); color: var(--acc); font-weight: 600; }
+.tabs button.active span { background: var(--card); }
+.tabs button[data-tab="trial"].active { background: rgb(217 119 6 / .14); color: var(--warn); }
+.tabs button[data-tab="off"].active { background: var(--err-soft); color: var(--err); }
+
+.title { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.title .name { min-width: 0; }
+.badge-trial { flex: none; font-size: 10px; font-weight: 700; letter-spacing: .06em; padding: 1px 6px;
+               border-radius: 5px; color: var(--warn); background: rgb(217 119 6 / .14);
+               border: 1px dashed rgb(217 119 6 / .5); }
+.client .note { font-size: 12px; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.client .note::before { content: "✎ "; opacity: .6; }
+
+@media (max-width: 720px) {
+  .list-tools input[type=search] { flex: 1 1 100%; }
+  .tabs { flex-wrap: wrap; overflow: visible; }
+}

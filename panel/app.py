@@ -200,6 +200,7 @@ def api_clients():
             "online": c["enabled"] and bool(hs) and now - hs < 180,
             "share_expires": shares.get(c["id"]),
             "via": c.get("via", "direct"),
+            "trial": bool(c.get("trial")), "note": c.get("note", ""),
         })
     return {"up": live is not None, "now": int(now), "clients": out,
             "cascade": state["server"].get("cascade") or None}
@@ -214,8 +215,10 @@ def api_create():
     limit, period = _parse_limit(data)
     expires = _parse_expires(data.get("expires"))       # до try: 400, а не 500
     via = "cascade" if data.get("via") == "cascade" else "direct"
+    note = str(data.get("note", "")).strip()[:200]
     try:
-        c = awg.add_client(name, expires=expires, limit_bytes=limit, limit_period=period, via=via)
+        c = awg.add_client(name, expires=expires, limit_bytes=limit, limit_period=period, via=via,
+                           trial=bool(data.get("trial")), note=note)
     except Exception as e:  # noqa: BLE001
         app.logger.exception("Не удалось создать клиента %r", name)
         return {"error": str(e)}, 500
@@ -242,6 +245,10 @@ def api_update(cid):
         fields["reset_usage"] = True
     if "via" in data:
         fields["via"] = "cascade" if data["via"] == "cascade" else "direct"
+    if "trial" in data:
+        fields["trial"] = bool(data["trial"])
+    if "note" in data:
+        fields["note"] = str(data["note"]).strip()[:200]
     try:
         awg.update_client(cid, **fields)
     except ValueError as e:

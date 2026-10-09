@@ -276,7 +276,8 @@ def next_ip(state):
     raise RuntimeError("Подсеть заполнена")
 
 
-def add_client(name, expires=None, limit_bytes=None, limit_period="total", via="direct"):
+def add_client(name, expires=None, limit_bytes=None, limit_period="total", via="direct",
+               trial=False, note=""):
     with _lock:
         state = load()
         priv, pub = genkey()
@@ -293,6 +294,8 @@ def add_client(name, expires=None, limit_bytes=None, limit_period="total", via="
             "limit_bytes": limit_bytes,
             "limit_period": limit_period,
             "via": via,
+            "trial": bool(trial),       # тестовый доступ
+            "note": note,               # контакт, оплата и т.п. — для поиска
         }
         state["clients"].append(c)
         save(state)

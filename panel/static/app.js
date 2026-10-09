@@ -147,6 +147,14 @@ function buildRow(c) {
   name.className = "name";
   name.title = "Нажмите, чтобы переименовать";
   name.addEventListener("click", () => startRename(c.id, name));
+  const title = document.createElement("div");
+  title.className = "title";
+  const trial = document.createElement("span");
+  trial.className = "badge-trial";
+  trial.textContent = "ТЕСТ";
+  title.append(name, trial);
+  const note = document.createElement("div");
+  note.className = "note";
   const meta = document.createElement("div");
   meta.className = "meta";
   const ip = document.createElement("code");
@@ -167,7 +175,7 @@ function buildRow(c) {
   bar.appendChild(barFill);
   const quotaText = document.createElement("span");
   quota.append(bar, quotaText);
-  info.append(name, meta, quota);
+  info.append(title, meta, note, quota);
 
   const traffic = document.createElement("div");
   traffic.className = "traffic";
@@ -201,12 +209,12 @@ function buildRow(c) {
     mk("qr", "QR-код", () => openQR(c.id)),
     mk("download", "Скачать .conf", () => (location.href = `/clients/${c.id}/download`)),
     mk("link", "Одноразовая ссылка", () => openShare(c.id)),
-    mk("limits", "Ограничения: срок и трафик", () => openLimits(c.id)),
+    mk("limits", "Настройки: срок, трафик, заметка", () => openLimits(c.id)),
     mk("trash", "Удалить", () => openDelete(c.id)),
   );
 
   li.append(spark, avatar, info, traffic, actions);
-  return { el: li, avatar, avText, dot, name, ip, seen, exp, link, quota, barFill, quotaText,
+  return { el: li, avatar, avText, dot, name, trial, note, ip, seen, exp, link, quota, barFill, quotaText,
            tDown, tUp, cb, pDown, pUp,
            prev: null, hist: { down: [], up: [] } };
 }
@@ -217,6 +225,9 @@ function updateRow(row, c, now) {
   row.avatar.style.setProperty("--h", hue(c.name));
   row.avText.textContent = initials(c.name);
   if (!row.renaming) row.name.textContent = c.name;
+  row.trial.hidden = !c.trial;
+  row.note.textContent = c.note || "";
+  row.note.hidden = !c.note;
   row.ip.textContent = c.ip;
   const REASONS = { limit: "лимит исчерпан", expired: "срок истёк" };
   row.seen.textContent = c.enabled ? (c.online ? "в сети" : fmtAgo(c.handshake, now))
@@ -242,7 +253,7 @@ function updateRow(row, c, now) {
     const left = c.expires - now;
     // Календарные дни до даты окончания — так же, как в калькуляторе дат.
     const days = Math.round((parseISO(c.expires_date) - today()) / DAY);
-    row.exp.textContent = left <= 0 ? "срок истёк"
+    row.exp.textContent = left <= 0 ? `истёк ${fmtDay(c.expires_date)}`
       : days <= 0 ? `до ${fmtDay(c.expires_date)} · последний день`
       : `до ${fmtDay(c.expires_date)} · ${days} ${plural(days, "день", "дня", "дней")}`;
     if (left <= 0) row.exp.classList.add("over");
@@ -274,9 +285,36 @@ function updateRow(row, c, now) {
   row.tUp.dataset.total = fmtBytes(c.rx);
 }
 
+// ---------------------------------------------------------------- группы
+const SOON_DAYS = 7;
+let tab = "all";
+try { tab = localStorage.getItem("tab") || "all"; } catch {}
+
+function inGroup(c, g, now) {
+  const soon = c.enabled && c.expires && c.expires > now && c.expires - now <= SOON_DAYS * 86400;
+  return g === "all" ? true
+    : g === "paid" ? c.enabled && !c.trial
+    : g === "trial" ? !!c.trial
+    : g === "soon" ? !!soon
+    : g === "off" ? !c.enabled
+    : true;
+}
+
 function matches(c) {
+  if (lastData && !inGroup(c, tab, lastData.now)) return false;
   if (!filter) return true;
-  return c.name.toLowerCase().includes(filter) || c.ip.includes(filter);
+  return c.name.toLowerCase().includes(filter) || c.ip.includes(filter) ||
+         (c.note || "").toLowerCase().includes(filter);
+}
+
+function renderTabs(list, now) {
+  document.querySelectorAll("#tabs button").forEach((b) => {
+    const g = b.dataset.tab;
+    b.classList.toggle("active", g === tab);
+    b.querySelector("span").textContent = list.filter((c) => inGroup(c, g, now)).length;
+  });
+  const visible = list.some((c) => { const r = rows.get(c.id); return r && !r.el.hidden; });
+  $("#tab-empty").hidden = !list.length || visible;
 }
 
 // ---------------------------------------------------------------- сортировка
@@ -323,6 +361,7 @@ function render(data) {
   });
 
   $("#empty").hidden = data.clients.length > 0;
+  renderTabs(data.clients, now);
   $("#st-total").textContent = data.clients.length;
   $("#st-online").textContent = online;
   $("#st-tx").textContent = fmtBytes(tx);
@@ -435,6 +474,8 @@ document.querySelectorAll(".presets").forEach((box) => {
       if (cur > base) base = cur;
     }
     // Дни (тестовый доступ) или месяцы (оплаченный период).
+    // «Тест · 5 дн» ставит отметку теста, оплата на месяцы — снимает.
+    if (form.trial) form.trial.checked = days !== undefined;
     form.expires.value = toISO(days !== undefined
       ? new Date(base.getFullYear(), base.getMonth(), base.getDate() + +days)
       : addMonths(base, +months));
@@ -462,6 +503,7 @@ $("#form-create").addEventListener("submit", async (e) => {
     const { id } = await api("POST", "/api/clients", {
       name: f.name.value, expires: f.expires.value, via: f.via ? f.via.value : "direct",
       limit_gb: f.limit_gb.value, limit_period: f.limit_period.value,
+      trial: f.trial.checked, note: f.note.value,
     });
     $("#dlg-create").close();
     toast("Клиент создан");
@@ -514,6 +556,8 @@ function openLimits(id) {
   updateDateHint(f);
   f.limit_gb.value = c.limit_bytes ? +(c.limit_bytes / 1024 ** 3).toFixed(2) : "";
   f.limit_period.value = c.limit_bytes ? c.limit_period : "month";
+  f.note.value = c.note || "";
+  f.trial.checked = !!c.trial;
   $("#limits-usage").textContent = `Израсходовано: ${fmtBytes(c.rx + c.tx)} ` +
     `(↓ ${fmtBytes(c.tx)}, ↑ ${fmtBytes(c.rx)})`;
   $("#dlg-limits").showModal();
@@ -525,9 +569,10 @@ $("#form-limits").addEventListener("submit", async (e) => {
     await api("PATCH", `/api/clients/${limId}`, {
       expires: f.expires.value, limit_gb: f.limit_gb.value,
       limit_period: f.limit_period.value, reset_usage: f.reset_usage.checked,
+      trial: f.trial.checked, note: f.note.value,
     });
     $("#dlg-limits").close();
-    toast("Ограничения сохранены");
+    toast("Сохранено");
     refresh();
   } catch (err) { toast(err.message, true); }
 });
@@ -590,7 +635,14 @@ $("#sort").addEventListener("change", (e) => {
 });
 $("#search").addEventListener("input", (e) => {
   filter = e.target.value.trim().toLowerCase();
-  clients.forEach((c) => { const r = rows.get(c.id); if (r) r.el.hidden = !matches(c); });
+  if (lastData) render(lastData);
+});
+$("#tabs").addEventListener("click", (e) => {
+  const b = e.target.closest("button");
+  if (!b) return;
+  tab = b.dataset.tab;
+  try { localStorage.setItem("tab", tab); } catch {}
+  if (lastData) render(lastData);
 });
 // Закрытие модалок кликом по фону.
 document.querySelectorAll("dialog").forEach((d) =>
