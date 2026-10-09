@@ -43,9 +43,9 @@
   <form method="dialog" id="form-create">
     <h3>Новый клиент</h3>
     <label>Имя <input name="name" maxlength="64" required placeholder="например, iphone-ivan" autocomplete="off"></label>
-    <label>Действует до <span class="muted">(необязательно)</span><input name="expires" type="date"></label>
+    <label><span>Действует до <span class="muted">(необязательно)</span></span><input name="expires" type="date"></label>
     <div class="field-row">
-      <label>Лимит трафика, ГБ <span class="muted">(необязательно)</span>
+      <label><span>Лимит трафика, ГБ <span class="muted">(необязательно)</span></span>
         <input name="limit_gb" type="number" min="0" step="any" placeholder="без лимита"></label>
       <label>Период <select name="limit_period">
         <option value="month">в месяц</option><option value="total">всего</option></select></label>
@@ -53,8 +53,9 @@
     {% if s.cascade %}
     <label>Маршрут <select name="via">
       <option value="direct">Напрямую — {{ s.endpoint }}:{{ s.port }}</option>
-      <option value="cascade">Через каскад — {{ s.cascade }} (для мобильного интернета)</option>
+      <option value="cascade">Через каскад — {{ s.cascade }}</option>
     </select></label>
+    <p class="muted small">Каскад — для мобильного интернета: подключение идёт через входной сервер.</p>
     {% endif %}
     <div class="modal-actions">
       <button type="button" class="btn" value="cancel" onclick="this.closest('dialog').close()">Отмена</button>

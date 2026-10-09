@@ -160,7 +160,11 @@ input:focus { outline: 2px solid var(--acc); outline-offset: -1px; }
          background: var(--card); color: var(--fg); box-shadow: 0 20px 50px rgb(0 0 0 / .25); }
 .modal.wide { width: min(480px, calc(100vw - 32px)); }
 .modal::backdrop { background: rgb(10 12 20 / .55); backdrop-filter: blur(2px); }
-.modal form { display: grid; gap: 14px; margin: 0; }
+.modal form { display: grid; grid-template-columns: minmax(0, 1fr); gap: 14px; margin: 0; }
+/* Поля не шире окна: иначе длинный пункт списка (адрес каскада) распирает модалку. */
+.modal { overflow-x: hidden; }
+.modal label, .field-row > * { min-width: 0; }
+.modal input:not([type=checkbox]), .modal select { width: 100%; max-width: 100%; min-width: 0; text-overflow: ellipsis; }
 .modal-actions { display: flex; justify-content: flex-end; gap: 8px; flex-wrap: wrap; margin-top: 6px; }
 .qr-box { background: #fff; border-radius: 12px; padding: 10px; }
 .qr-box img { display: block; width: 100%; height: auto; image-rendering: pixelated; }
@@ -198,7 +202,7 @@ details summary { cursor: pointer; color: var(--muted); }
 
 .modal select { font: inherit; padding: 8px 11px; border: 1px solid var(--line); border-radius: 9px;
                 background: var(--soft); color: var(--fg); }
-.field-row { display: grid; grid-template-columns: 1fr 140px; gap: 10px; }
+.field-row { display: grid; grid-template-columns: minmax(0, 1fr) 140px; gap: 10px; }
 .share-url { display: flex; gap: 6px; }
 .share-url input { flex: 1; font: 13px ui-monospace, monospace; }
 label.check { flex-direction: row; color: var(--fg); font-size: 14px; }
