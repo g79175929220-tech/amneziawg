@@ -59,16 +59,26 @@ function toast(msg, err = false) {
 }
 
 async function api(method, url, body) {
-  const res = await fetch(url, {
-    method,
-    headers: { "Content-Type": "application/json", "X-CSRF-Token": CSRF },
-    body: body ? JSON.stringify(body) : undefined,
-    credentials: "same-origin",
-  });
+  let res;
+  try {
+    res = await fetch(url, {
+      method,
+      headers: { "Content-Type": "application/json", "X-CSRF-Token": CSRF },
+      body: body ? JSON.stringify(body) : undefined,
+      credentials: "same-origin",
+    });
+  } catch {
+    throw new Error("Нет связи с панелью — проверьте интернет или перезапуск панели");
+  }
   if (res.status === 401) { location.href = "/login"; throw new Error("auth"); }
   const ct = res.headers.get("content-type") || "";
   const data = ct.includes("json") ? await res.json() : await res.text();
-  if (!res.ok) throw new Error((data && data.error) || `Ошибка ${res.status}`);
+  if (!res.ok) {
+    const msg = (data && data.error) || `Ошибка ${res.status} — обновите страницу (F5)`;
+    // Устаревшая сессия: обновляем страницу сами, чтобы получить свежий токен.
+    if (data && data.reload) setTimeout(() => location.reload(), 2500);
+    throw new Error(msg);
+  }
   return data;
 }
 

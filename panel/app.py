@@ -13,6 +13,7 @@ import qrcode
 import qrcode.image.svg
 from flask import (Flask, Response, abort, flash, redirect, render_template,
                    request, session, url_for)
+from werkzeug.exceptions import HTTPException
 from werkzeug.security import check_password_hash, generate_password_hash
 
 import awg
@@ -84,8 +85,22 @@ def guard():
         return ({"error": "Требуется вход"}, 401) if is_api else redirect(url_for("login"))
     if request.method not in ("GET", "HEAD"):
         tok = request.headers.get("X-CSRF-Token") if is_api else request.form.get("csrf")
-        if not hmac.compare_digest(tok or "", session.get("csrf", "")):
-            abort(400, "Неверный CSRF-токен")
+        if not hmac.compare_digest((tok or "").encode(), session.get("csrf", "").encode()):
+            # Обычно значит, что в панель заново вошли в другой вкладке и токен этой устарел.
+            msg = "Сессия устарела — обновите страницу (F5) и повторите"
+            return ({"error": msg, "reload": True}, 400) if is_api else abort(400, msg)
+
+
+@app.errorhandler(HTTPException)
+def api_http_error(e):
+    """Ошибки API — всегда JSON с понятным текстом, а не HTML-страница."""
+    if not request.path.startswith("/api/"):
+        return e
+    texts = {400: "Неверный запрос", 404: "Клиент не найден — обновите страницу",
+             405: "Панель на сервере устарела — обновите её (git pull && bash install.sh)",
+             413: "Слишком большой запрос"}
+    desc = e.description if e.description and e.description != type(e).description else None
+    return {"error": desc or texts.get(e.code, f"Ошибка {e.code}: {e.name}")}, e.code
 
 
 @app.route("/login", methods=["GET", "POST"])
@@ -97,7 +112,7 @@ def login():
             flash("Слишком много попыток. Подождите 15 минут.", "err")
             return render_template("login.html"), 429
         cfg = load_panel()
-        if (hmac.compare_digest(request.form.get("username", ""), cfg["username"])
+        if (hmac.compare_digest(request.form.get("username", "").encode(), cfg["username"].encode())
                 and check_password_hash(cfg["password_hash"], request.form.get("password", ""))):
             session.clear()
             session.permanent = True
@@ -193,10 +208,10 @@ def api_create():
     if not name:
         return {"error": "Укажите имя клиента"}, 400
     limit, period = _parse_limit(data)
+    expires = _parse_expires(data.get("expires"))       # до try: 400, а не 500
     via = "cascade" if data.get("via") == "cascade" else "direct"
     try:
-        c = awg.add_client(name, expires=_parse_expires(data.get("expires")),
-                           limit_bytes=limit, limit_period=period, via=via)
+        c = awg.add_client(name, expires=expires, limit_bytes=limit, limit_period=period, via=via)
     except Exception as e:  # noqa: BLE001
         return {"error": str(e)}, 500
     return {"id": c["id"]}
