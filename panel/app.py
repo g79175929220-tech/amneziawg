@@ -100,7 +100,9 @@ def api_http_error(e):
              405: "Панель на сервере устарела — обновите её (git pull && bash install.sh)",
              413: "Слишком большой запрос"}
     desc = e.description if e.description and e.description != type(e).description else None
-    return {"error": desc or texts.get(e.code, f"Ошибка {e.code}: {e.name}")}, e.code
+    msg = desc or texts.get(e.code, f"Ошибка {e.code}: {e.name}")
+    app.logger.warning("API %s %s -> %s: %s", request.method, request.path, e.code, msg)
+    return {"error": msg}, e.code
 
 
 @app.route("/login", methods=["GET", "POST"])
@@ -215,6 +217,7 @@ def api_create():
     try:
         c = awg.add_client(name, expires=expires, limit_bytes=limit, limit_period=period, via=via)
     except Exception as e:  # noqa: BLE001
+        app.logger.exception("Не удалось создать клиента %r", name)
         return {"error": str(e)}, 500
     return {"id": c["id"]}
 

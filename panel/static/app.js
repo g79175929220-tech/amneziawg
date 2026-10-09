@@ -48,10 +48,14 @@ function hue(str) {
 
 function toast(msg, err = false) {
   const t = $("#toast");
+  // Открытое модальное окно лежит в «верхнем слое» над всей страницей: уведомление,
+  // оставшееся в body, оказалось бы под его размытым фоном. Переносим его в окно.
+  const host = document.querySelector("dialog[open]") || document.body;
+  if (t.parentNode !== host) host.appendChild(t);
   t.textContent = msg;
   t.className = "toast show" + (err ? " err" : "");
   clearTimeout(t._timer);
-  t._timer = setTimeout(() => (t.className = "toast"), 2500);
+  t._timer = setTimeout(() => (t.className = "toast"), err ? 8000 : 2500);
 }
 
 async function api(method, url, body) {
@@ -70,7 +74,14 @@ async function api(method, url, body) {
   const ct = res.headers.get("content-type") || "";
   const data = ct.includes("json") ? await res.json() : await res.text();
   if (!res.ok) {
-    const msg = (data && data.error) || `Ошибка ${res.status} — обновите страницу (F5)`;
+    // Не JSON — ответил не сам обработчик панели. Показываем, что именно пришло.
+    let raw = "";
+    if (typeof data === "string") {
+      const title = data.match(/<title>([^<]*)<\/title>/i);
+      raw = (title ? title[1] : data.replace(/<[^>]+>/g, " ")).replace(/\s+/g, " ").trim().slice(0, 120);
+    }
+    const msg = (data && data.error) ||
+      `Ошибка ${res.status}${res.statusText ? " " + res.statusText : ""}${raw ? ": " + raw : ""}`;
     // Устаревшая сессия: обновляем страницу сами, чтобы получить свежий токен.
     if (data && data.reload) setTimeout(() => location.reload(), 2500);
     throw new Error(msg);

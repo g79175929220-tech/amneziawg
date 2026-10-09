@@ -6,7 +6,9 @@ Wants=network-online.target
 [Service]
 WorkingDirectory=/opt/awg-panel
 EnvironmentFile=-/etc/awg-panel/panel.env
+# Журнал запросов (метод, путь, код ответа) — в journalctl -u awg-panel.
 ExecStart=/opt/awg-panel/venv/bin/gunicorn --workers 1 --threads 4 \
+  --access-logfile - --access-logformat '%%(h)s "%%(r)s" %%(s)s %%(b)s %%(M)sms' \
   --bind ${PANEL_BIND} --certfile /etc/awg-panel/tls.crt --keyfile /etc/awg-panel/tls.key app:app
 Restart=on-failure
 RestartSec=3
