@@ -10,6 +10,8 @@
     <label>DNS для клиентов <input name="dns" value="{{ s.dns }}"></label>
     <label>MTU <input name="mtu" type="number" min="1280" max="1500" value="{{ s.mtu }}"></label>
     <label>PersistentKeepalive <input name="keepalive" type="number" min="0" max="300" value="{{ s.keepalive }}"></label>
+    <label>Срок нового клиента, мес (0 — бессрочно)
+      <input name="default_months" type="number" min="0" max="120" value="{{ s.get('default_months', 6) }}"></label>
     <label>Адрес каскада (IP:порт входного сервера)
       <input name="cascade" value="{{ s.cascade or '' }}" placeholder="например 95.163.1.2:443"></label>
     <div><button>Сохранить</button></div>

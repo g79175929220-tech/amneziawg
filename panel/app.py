@@ -190,6 +190,8 @@ def api_clients():
             "id": c["id"], "name": c["name"], "ip": c["ip"], "enabled": c["enabled"],
             "disabled_reason": c.get("disabled_reason"),
             "created": c.get("created"), "expires": c.get("expires"),
+            # Дата окончания по времени сервера: браузер в другом поясе не сдвинет её на день.
+            "expires_date": time.strftime("%Y-%m-%d", time.localtime(c["expires"])) if c.get("expires") else None,
             "limit_bytes": c.get("limit_bytes"), "limit_period": c.get("limit_period", "total"),
             "rx": rx, "tx": tx, "handshake": hs,
             "endpoint": st.get("endpoint", ""),
@@ -343,6 +345,7 @@ def _settings():
                 s["dns"] = request.form["dns"].strip()
                 s["mtu"] = int(request.form["mtu"])
                 s["keepalive"] = int(request.form["keepalive"])
+                s["default_months"] = max(0, min(120, int(request.form.get("default_months") or 0)))
                 port = int(request.form["port"])
                 restart = port != s["port"]
                 s["port"] = port

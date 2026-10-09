@@ -30,13 +30,9 @@ function fmtAgo(ts, now) {
   return `${Math.floor(d / 86400)} д назад`;
 }
 
-function fmtDate(ts) {
-  return new Date(ts * 1000).toLocaleDateString("ru-RU", { day: "numeric", month: "short", year: "numeric" });
-}
-function isoDate(ts) {
-  if (!ts) return "";
-  const d = new Date(ts * 1000);
-  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+function fmtDay(iso) {
+  const [y, m, d] = iso.split("-").map(Number);
+  return new Date(y, m - 1, d).toLocaleDateString("ru-RU", { day: "numeric", month: "short", year: "numeric" });
 }
 
 function initials(name) {
@@ -233,7 +229,7 @@ function updateRow(row, c, now) {
   row.exp.classList.remove("warn", "over");
   if (c.expires) {
     const left = c.expires - now;
-    row.exp.textContent = left > 0 ? `до ${fmtDate(c.expires)}` : "срок истёк";
+    row.exp.textContent = left > 0 ? `до ${fmtDay(c.expires_date)}` : "срок истёк";
     if (left <= 0) row.exp.classList.add("over");
     else if (left < 3 * 86400) row.exp.classList.add("warn");
   }
@@ -358,9 +354,65 @@ function startRename(id, el) {
   input.addEventListener("blur", () => finish(true));
 }
 
+// ---------------------------------------------------------------- калькулятор дат
+const DEFAULT_MONTHS = +($("#cfg") ? $("#cfg").dataset.defaultMonths : 6);
+const DAY = 86400000;
+
+function today() { const d = new Date(); d.setHours(0, 0, 0, 0); return d; }
+function parseISO(v) { const [y, m, d] = v.split("-").map(Number); return new Date(y, m - 1, d); }
+function toISO(d) {
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+}
+// +N месяцев с поправкой на конец месяца: 31 авг + 6 мес = 28 (29) фев, а не 3 марта.
+function addMonths(d, n) {
+  const r = new Date(d.getFullYear(), d.getMonth() + n, 1);
+  const last = new Date(r.getFullYear(), r.getMonth() + 1, 0).getDate();
+  r.setDate(Math.min(d.getDate(), last));
+  return r;
+}
+function plural(n, one, few, many) {
+  const m10 = n % 10, m100 = n % 100;
+  return m10 === 1 && m100 !== 11 ? one : m10 >= 2 && m10 <= 4 && (m100 < 10 || m100 >= 20) ? few : many;
+}
+
+function updateDateHint(form) {
+  const v = form.expires.value, hint = form.querySelector(".date-hint");
+  form.querySelectorAll(".presets button").forEach((b) => b.classList.remove("active"));
+  if (!v) { hint.textContent = "Бессрочно"; return; }
+  const d = parseISO(v), days = Math.round((d - today()) / DAY);
+  const when = d.toLocaleDateString("ru-RU", { day: "numeric", month: "long", year: "numeric" });
+  hint.textContent = days < 0 ? `${when} — уже прошло (${-days} ${plural(-days, "день", "дня", "дней")} назад)`
+    : days === 0 ? `${when} — сегодня последний день`
+    : `до ${when} включительно · ${days} ${plural(days, "день", "дня", "дней")}`;
+}
+
+// Кнопки-пресеты: «новый» — от сегодня; «продлить» — от текущего окончания,
+// если оно ещё не прошло (оплатил заранее — оставшиеся дни не теряются).
+document.querySelectorAll(".presets").forEach((box) => {
+  const form = box.closest("form");
+  box.addEventListener("click", (e) => {
+    const months = e.target.dataset && e.target.dataset.months;
+    if (months === undefined) return;
+    if (+months === 0) { form.expires.value = ""; updateDateHint(form); return; }
+    let base = today();
+    if (box.dataset.mode === "extend" && form.dataset.base) {
+      const cur = parseISO(form.dataset.base);
+      if (cur > base) base = cur;
+    }
+    form.expires.value = toISO(addMonths(base, +months));
+    updateDateHint(form);
+    e.target.classList.add("active");
+  });
+  form.expires.addEventListener("input", () => updateDateHint(form));
+});
+
 function openCreate() {
   const f = $("#form-create");
   f.reset();
+  f.expires.value = DEFAULT_MONTHS ? toISO(addMonths(today(), DEFAULT_MONTHS)) : "";
+  updateDateHint(f);
+  const def = f.querySelector(`.presets button[data-months="${DEFAULT_MONTHS}"]`);
+  if (def) def.classList.add("active");
   $("#dlg-create").showModal();
   f.name.focus();
 }
@@ -419,7 +471,9 @@ function openLimits(id) {
   limId = id;
   f.reset();
   $("#limits-name").textContent = c.name;
-  f.expires.value = isoDate(c.expires);
+  f.expires.value = c.expires_date || "";
+  f.dataset.base = c.expires_date || "";       // от неё считается «+N мес»
+  updateDateHint(f);
   f.limit_gb.value = c.limit_bytes ? +(c.limit_bytes / 1024 ** 3).toFixed(2) : "";
   f.limit_period.value = c.limit_bytes ? c.limit_period : "month";
   $("#limits-usage").textContent = `Израсходовано: ${fmtBytes(c.rx + c.tx)} ` +

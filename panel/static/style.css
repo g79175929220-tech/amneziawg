@@ -212,3 +212,9 @@ label.check span { display: flex; align-items: center; gap: 8px; }
 .segmented { display: flex; padding: 3px; gap: 3px; background: var(--soft); border-radius: 10px; margin-bottom: 12px; }
 .segmented button { flex: 1; justify-content: center; border: 0; background: transparent; color: var(--muted); padding: 6px 10px; }
 .segmented button.active { background: var(--card); color: var(--fg); box-shadow: var(--shadow); font-weight: 600; }
+
+/* ---------- калькулятор дат */
+.presets { display: flex; flex-wrap: wrap; gap: 6px; margin-top: -6px; }
+.presets button { padding: 5px 10px; font-size: 13px; border-radius: 99px; background: var(--soft); }
+.presets button.active { background: var(--acc-soft); border-color: var(--acc); color: var(--acc); font-weight: 600; }
+.date-hint { margin: -6px 0 0; }

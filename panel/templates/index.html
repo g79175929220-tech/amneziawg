@@ -1,5 +1,6 @@
 {% extends "base.html" %}
 {% block body %}
+<div id="cfg" data-default-months="{{ s.get('default_months', 6) }}" hidden></div>
 <section class="card server">
   <div class="server-head">
     <div>
@@ -43,7 +44,15 @@
   <form method="dialog" id="form-create">
     <h3>Новый клиент</h3>
     <label>Имя <input name="name" maxlength="64" required placeholder="например, iphone-ivan" autocomplete="off"></label>
-    <label><span>Действует до <span class="muted">(необязательно)</span></span><input name="expires" type="date"></label>
+    <label>Действует до <input name="expires" type="date"></label>
+    <div class="presets" data-mode="new">
+      <button type="button" data-months="1">1 мес</button>
+      <button type="button" data-months="3">3 мес</button>
+      <button type="button" data-months="6">6 мес</button>
+      <button type="button" data-months="12">1 год</button>
+      <button type="button" data-months="0">Бессрочно</button>
+    </div>
+    <p class="muted small date-hint"></p>
     <div class="field-row">
       <label><span>Лимит трафика, ГБ <span class="muted">(необязательно)</span></span>
         <input name="limit_gb" type="number" min="0" step="any" placeholder="без лимита"></label>
@@ -86,6 +95,14 @@
     <h3>Ограничения</h3>
     <p class="muted small" id="limits-name"></p>
     <label>Действует до <input name="expires" type="date"></label>
+    <div class="presets" data-mode="extend">
+      <button type="button" data-months="1">+1 мес</button>
+      <button type="button" data-months="3">+3 мес</button>
+      <button type="button" data-months="6">+6 мес</button>
+      <button type="button" data-months="12">+1 год</button>
+      <button type="button" data-months="0">Бессрочно</button>
+    </div>
+    <p class="muted small date-hint"></p>
     <div class="field-row">
       <label>Лимит трафика, ГБ <input name="limit_gb" type="number" min="0" step="any" placeholder="без лимита"></label>
       <label>Период <select name="limit_period">
