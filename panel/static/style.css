@@ -223,3 +223,4 @@ label.check span { display: flex; align-items: center; gap: 8px; }
 .list-tools select { font: inherit; font-size: 14px; padding: 8px 11px; border: 1px solid var(--line);
                      border-radius: 9px; background: var(--soft); color: var(--fg); }
 @media (max-width: 720px) { .list-tools select { flex: 1; } }
+.presets button.trial { border-style: dashed; }

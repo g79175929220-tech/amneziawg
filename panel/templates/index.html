@@ -52,6 +52,7 @@
     <label>Имя <input name="name" maxlength="64" required placeholder="например, iphone-ivan" autocomplete="off"></label>
     <label>Действует до <input name="expires" type="date"></label>
     <div class="presets" data-mode="new">
+      <button type="button" data-days="5" class="trial">Тест · 5 дн</button>
       <button type="button" data-months="1">1 мес</button>
       <button type="button" data-months="3">3 мес</button>
       <button type="button" data-months="6">6 мес</button>
@@ -102,6 +103,7 @@
     <p class="muted small" id="limits-name"></p>
     <label>Действует до <input name="expires" type="date"></label>
     <div class="presets" data-mode="extend">
+      <button type="button" data-days="5" class="trial">+5 дн</button>
       <button type="button" data-months="1">+1 мес</button>
       <button type="button" data-months="3">+3 мес</button>
       <button type="button" data-months="6">+6 мес</button>

@@ -426,15 +426,18 @@ function updateDateHint(form) {
 document.querySelectorAll(".presets").forEach((box) => {
   const form = box.closest("form");
   box.addEventListener("click", (e) => {
-    const months = e.target.dataset && e.target.dataset.months;
-    if (months === undefined) return;
-    if (+months === 0) { form.expires.value = ""; updateDateHint(form); return; }
+    const { months, days } = (e.target.dataset || {});
+    if (months === undefined && days === undefined) return;
+    if (months !== undefined && +months === 0) { form.expires.value = ""; updateDateHint(form); return; }
     let base = today();
     if (box.dataset.mode === "extend" && form.dataset.base) {
       const cur = parseISO(form.dataset.base);
       if (cur > base) base = cur;
     }
-    form.expires.value = toISO(addMonths(base, +months));
+    // Дни (тестовый доступ) или месяцы (оплаченный период).
+    form.expires.value = toISO(days !== undefined
+      ? new Date(base.getFullYear(), base.getMonth(), base.getDate() + +days)
+      : addMonths(base, +months));
     updateDateHint(form);
     e.target.classList.add("active");
   });
