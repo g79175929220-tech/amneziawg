@@ -249,3 +249,6 @@ label.check span { display: flex; align-items: center; gap: 8px; }
   .list-tools input[type=search] { flex: 1 1 100%; }
   .tabs { flex-wrap: wrap; overflow: visible; }
 }
+.share-qr { max-width: 260px; margin: 0 auto 10px; }
+.share-actions { display: flex; gap: 8px; justify-content: center; flex-wrap: wrap; }
+#share-result .share-url { margin-top: 12px; }

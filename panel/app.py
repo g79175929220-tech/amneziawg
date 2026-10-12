@@ -264,7 +264,12 @@ def api_share(cid):
     _get_client(cid)
     ttl = SHARE_TTLS.get((request.get_json(silent=True) or {}).get("ttl"), 86400)
     token, expires = awg.create_share(cid, ttl)
-    return {"url": url_for("share_page", token=token, _external=True), "expires": expires}
+    url = url_for("share_page", token=token, _external=True)
+    # QR-код самой ссылки: его картинку можно переслать клиенту, он наведёт камеру.
+    img = qrcode.make(url, image_factory=qrcode.image.svg.SvgPathImage, box_size=10, border=2)
+    buf = io.BytesIO()
+    img.save(buf)
+    return {"url": url, "expires": expires, "qr_svg": buf.getvalue().decode()}
 
 
 def _share_headers(resp):

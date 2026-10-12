@@ -587,17 +587,97 @@ function openShare(id) {
   $("#share-create").hidden = false;
   $("#dlg-share").showModal();
 }
+// Картинка для отправки клиенту: имя, QR-код ссылки, подсказка и срок действия.
+let shareCard = null;     // {name, svg, expires}
+
+function loadSvg(svg) {
+  return new Promise((resolve, reject) => {
+    const img = new Image();
+    img.onload = () => resolve(img);
+    img.onerror = reject;
+    img.src = "data:image/svg+xml;charset=utf-8," + encodeURIComponent(svg);
+  });
+}
+
+function fitText(ctx, text, maxW) {
+  if (ctx.measureText(text).width <= maxW) return text;
+  while (text.length > 1 && ctx.measureText(text + "…").width > maxW) text = text.slice(0, -1);
+  return text + "…";
+}
+
+async function shareCardBlob() {
+  const { name, svg, expires } = shareCard;
+  const W = 720, H = 930, Q = 600;
+  const c = document.createElement("canvas");
+  c.width = W; c.height = H;
+  const ctx = c.getContext("2d");
+  ctx.fillStyle = "#ffffff";
+  ctx.fillRect(0, 0, W, H);
+  ctx.textAlign = "center";
+  ctx.fillStyle = "#161a23";
+  ctx.font = "700 34px system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif";
+  ctx.fillText(fitText(ctx, `VPN · ${name}`, W - 80), W / 2, 66);
+  ctx.imageSmoothingEnabled = false;          // чёткие края модулей QR
+  ctx.drawImage(await loadSvg(svg), (W - Q) / 2, 100, Q, Q);
+  ctx.font = "600 28px system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif";
+  ctx.fillText("Наведите камеру телефона на код", W / 2, 760);
+  ctx.fillStyle = "#6b7280";
+  ctx.font = "22px system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif";
+  const until = new Date(expires * 1000).toLocaleString("ru-RU",
+    { day: "numeric", month: "long", hour: "2-digit", minute: "2-digit" });
+  ctx.fillText("Ссылка одноразовая: откроется только один раз", W / 2, 812);
+  ctx.fillText(`Действует до ${until}`, W / 2, 848);
+  return new Promise((resolve) => c.toBlob(resolve, "image/png"));
+}
+
+// Имя файла латиницей: Chromium отбрасывает кириллицу в имени скачиваемого файла.
+const TR = { а: "a", б: "b", в: "v", г: "g", д: "d", е: "e", ё: "e", ж: "zh", з: "z", и: "i", й: "y",
+  к: "k", л: "l", м: "m", н: "n", о: "o", п: "p", р: "r", с: "s", т: "t", у: "u", ф: "f", х: "h",
+  ц: "ts", ч: "ch", ш: "sh", щ: "sch", ъ: "", ы: "y", ь: "", э: "e", ю: "yu", я: "ya" };
+function translit(str) {
+  const out = [...str].map((ch) => {
+    const t = TR[ch.toLowerCase()];
+    if (t === undefined) return ch;
+    return ch === ch.toLowerCase() ? t : t.charAt(0).toUpperCase() + t.slice(1);
+  }).join("");
+  return out.replace(/[^A-Za-z0-9_-]+/g, "_").replace(/^_+|_+$/g, "") || "client";
+}
+
+$("#share-img-save").addEventListener("click", async () => {
+  try {
+    const blob = await shareCardBlob();
+    const a = document.createElement("a");
+    a.href = URL.createObjectURL(blob);
+    a.download = `vpn-${translit(shareCard.name)}.png`;
+    document.body.appendChild(a);    // иначе часть браузеров игнорирует имя файла
+    a.click();
+    a.remove();
+    setTimeout(() => URL.revokeObjectURL(a.href), 5000);
+  } catch (e) { toast("Не удалось сохранить картинку", true); }
+});
+
+$("#share-img-copy").addEventListener("click", async () => {
+  try {
+    // Promise внутри ClipboardItem — так копирование работает и в Safari.
+    await navigator.clipboard.write([new ClipboardItem({ "image/png": shareCardBlob() })]);
+    toast("Картинка скопирована — вставьте её в чат (Ctrl+V)");
+  } catch (e) {
+    toast("Браузер не дал скопировать картинку — нажмите «Скачать PNG»", true);
+  }
+});
+
 $("#share-create").addEventListener("click", async () => {
   try {
     const r = await api("POST", `/api/clients/${shareId}/share`, { ttl: $("#share-ttl").value });
+    shareCard = { name: clients.find((x) => x.id === shareId).name, svg: r.qr_svg, expires: r.expires };
+    $("#share-qr").src = "data:image/svg+xml;charset=utf-8," + encodeURIComponent(r.qr_svg);
     $("#share-url").value = r.url;
     $("#share-exp").textContent = `Действует до ${new Date(r.expires * 1000).toLocaleString("ru-RU")} ` +
       "или до первого открытия. Сертификат панели самоподписанный — браузер получателя покажет предупреждение.";
     $("#share-form").hidden = true;
     $("#share-create").hidden = true;
     $("#share-result").hidden = false;
-    $("#share-url").select();
-    copy(r.url, "Ссылка создана и скопирована");
+    toast("Ссылка создана");
     refresh();
   } catch (e) { toast(e.message, true); }
 });

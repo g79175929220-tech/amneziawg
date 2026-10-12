@@ -152,7 +152,13 @@
        Превью в мессенджерах ссылку не погасят. Новая ссылка отменяет предыдущую.</p>
   </div>
   <div id="share-result" hidden>
-    <div class="share-url"><input id="share-url" readonly><button class="btn" id="share-copy">Копировать</button></div>
+    <div class="qr-box share-qr"><img id="share-qr" alt="QR-код ссылки"></div>
+    <div class="share-actions">
+      <button class="btn primary" id="share-img-copy">Копировать картинку</button>
+      <button class="btn" id="share-img-save">Скачать PNG</button>
+    </div>
+    <p class="muted small center">Отправьте картинку клиенту — он наведёт камеру телефона на код.</p>
+    <div class="share-url"><input id="share-url" readonly><button class="btn" id="share-copy">Копировать ссылку</button></div>
     <p class="muted small" id="share-exp"></p>
   </div>
   <div class="modal-actions">
