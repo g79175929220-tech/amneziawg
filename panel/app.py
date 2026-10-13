@@ -298,7 +298,7 @@ def share_redeem(token):
     img = qrcode.make(conf, image_factory=qrcode.image.svg.SvgPathImage, box_size=10, border=2)
     buf = io.BytesIO()
     img.save(buf)
-    fname = "".join(ch if ch.isalnum() or ch in "-_" else "_" for ch in c["name"]) or "client"
+    fname = file_name(c["name"])
     return _share_headers(app.make_response(render_template(
         "share.html", c=c, token=token, conf=conf, qr=buf.getvalue().decode(), fname=fname)))
 
@@ -328,12 +328,30 @@ def api_config(cid):
                     headers={"Cache-Control": "no-store"})
 
 
+_TR = dict(zip("абвгдеёжзийклмнопрстуфхцчшщъыьэюя",
+               ["a", "b", "v", "g", "d", "e", "e", "zh", "z", "i", "y", "k", "l", "m", "n", "o", "p",
+                "r", "s", "t", "u", "f", "h", "ts", "ch", "sh", "sch", "", "y", "", "e", "yu", "ya"]))
+
+
+def file_name(name):
+    """Имя файла латиницей: браузеры и мессенджеры теряют кириллицу в именах загрузок."""
+    out = []
+    for ch in name:
+        t = _TR.get(ch.lower())
+        out.append(ch if t is None else (t.capitalize() if ch.isupper() else t))
+    return re.sub(r"[^A-Za-z0-9_-]+", "_", "".join(out)).strip("_") or "client"
+
+
 @app.get("/clients/<cid>/download")
 def download(cid):
+    """Конфиг клиента. По умолчанию .vpn — его открывает AmneziaVPN (формат определяется по
+    содержимому, а на Android .vpn привязан к приложению); ?format=conf — для AmneziaWG.
+    octet-stream, а не text/plain: иначе телефоны сохраняют файл как *.conf.txt."""
     state, c = _get_client(cid)
-    fname = "".join(ch if ch.isalnum() or ch in "-_" else "_" for ch in c["name"]) or "client"
-    return Response(awg.client_conf(state, c), mimetype="text/plain",
-                    headers={"Content-Disposition": f'attachment; filename="{fname}.conf"'})
+    ext = "conf" if request.args.get("format") == "conf" else "vpn"
+    return Response(awg.client_conf(state, c), mimetype="application/octet-stream",
+                    headers={"Content-Disposition": f'attachment; filename="{file_name(c["name"])}.{ext}"',
+                             "X-Content-Type-Options": "nosniff", "Cache-Control": "no-store"})
 
 
 @app.route("/settings", methods=["GET", "POST"])

@@ -207,7 +207,7 @@ function buildRow(c) {
   actions.append(
     sw,
     mk("qr", "QR-код", () => openQR(c.id)),
-    mk("download", "Скачать .conf", () => (location.href = `/clients/${c.id}/download`)),
+    mk("download", "Скачать .vpn (AmneziaVPN)", () => (location.href = `/clients/${c.id}/download`)),
     mk("link", "Одноразовая ссылка", () => openShare(c.id)),
     mk("limits", "Настройки: срок, трафик, заметка", () => openLimits(c.id)),
     mk("trash", "Удалить", () => openDelete(c.id)),
@@ -537,6 +537,7 @@ function openQR(id) {
   showRoute(c && c.via === "cascade" ? "cascade" : "direct");
   $("#qr-img").src = `/api/clients/${id}/qr.svg?t=${Date.now()}`;
   $("#qr-download").href = `/clients/${id}/download`;
+  $("#qr-download-conf").href = `/clients/${id}/download?format=conf`;
   $("#dlg-qr").showModal();
 }
 $("#qr-copy").addEventListener("click", async () => {

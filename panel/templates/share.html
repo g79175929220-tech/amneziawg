@@ -18,20 +18,21 @@
   <div class="flash err">Ссылка погашена — эта страница больше не откроется. Сохраните конфигурацию сейчас.</div>
   <ol class="steps">
     <li>Установите приложение <b>AmneziaVPN</b> или <b>AmneziaWG</b> (с поддержкой AmneziaWG 3.x).</li>
-    <li>Отсканируйте QR-код или импортируйте файл конфигурации.</li>
+    <li>Отсканируйте QR-код или скачайте файл <b>.vpn</b> и откройте его в AmneziaVPN.</li>
   </ol>
   <div class="qr-box">{{ qr|safe }}</div>
   <div class="modal-actions">
     <button class="btn" id="copy">Копировать</button>
-    <button class="btn primary" id="download">Скачать {{ fname }}.conf</button>
+    <button class="btn primary" id="download">Скачать {{ fname }}.vpn</button>
   </div>
   <details><summary>Показать текст конфигурации</summary><pre id="conf">{{ conf }}</pre></details>
   <script>
     const conf = document.getElementById("conf").textContent;
     document.getElementById("download").addEventListener("click", () => {
       const a = document.createElement("a");
-      a.href = URL.createObjectURL(new Blob([conf], { type: "text/plain" }));
-      a.download = {{ (fname ~ ".conf")|tojson }};
+      a.href = URL.createObjectURL(new Blob([conf], { type: "application/octet-stream" }));
+      document.body.appendChild(a);
+      a.download = {{ (fname ~ ".vpn")|tojson }};
       a.click();
     });
     document.getElementById("copy").addEventListener("click", async (e) => {
