@@ -252,3 +252,10 @@ label.check span { display: flex; align-items: center; gap: 8px; }
 .share-qr { max-width: 260px; margin: 0 auto 10px; }
 .share-actions { display: flex; gap: 8px; justify-content: center; flex-wrap: wrap; }
 #share-result .share-url { margin-top: 12px; }
+
+/* ---------- настройки: Telegram и копии */
+.form-grid label.check { grid-column: 1 / -1; }
+.btn-row { grid-column: 1 / -1; display: flex; gap: 8px; flex-wrap: wrap; }
+table.backups { width: 100%; border-collapse: collapse; margin-top: 14px; font-size: 14px; }
+table.backups td { padding: 8px 6px; border-top: 1px solid var(--line); white-space: nowrap; }
+table.backups td:first-child { white-space: normal; word-break: break-all; }

@@ -330,9 +330,10 @@ def over_limit(c):
     return bool(c.get("limit_bytes")) and u["rx"] + u["tx"] >= c["limit_bytes"]
 
 
-def _account(state, live):
+def _account(state, live, events=None):
     """Перенести прирост счётчиков в usage, применить срок и лимит.
-    Возвращает True, если поменялся набор включённых клиентов."""
+    Возвращает True, если поменялся набор включённых клиентов. Автоотключения
+    дописываются в events (для уведомлений)."""
     now = time.time()
     period = _period()
     changed = False
@@ -355,23 +356,31 @@ def _account(state, live):
                     c["enabled"], c["disabled_reason"] = True, None
                     changed = True
             c["period"] = period
+        reason = None
         if c["enabled"] and c.get("expires") and c["expires"] < now:
-            c["enabled"], c["disabled_reason"] = False, "expired"
-            changed = True
+            reason = "expired"
         elif c["enabled"] and over_limit(c):
-            c["enabled"], c["disabled_reason"] = False, "limit"
+            reason = "limit"
+        if reason:
+            c["enabled"], c["disabled_reason"], c["disabled_at"] = False, reason, int(now)
             changed = True
+            if events is not None:
+                events.append({"type": reason, "id": c["id"], "name": c["name"]})
     return changed
 
 
 def check():
-    """Периодическая проверка: учёт трафика, сроки, лимиты."""
+    """Периодическая проверка: учёт трафика, сроки, лимиты.
+    Возвращает (события автоотключения, работает ли туннель)."""
     with _lock:
         state = load()
-        changed = _account(state, status(state))
+        live = status(state)
+        events = []
+        changed = _account(state, live, events)
         save(state)
         if changed:
             apply(state)
+        return events, live is not None
 
 
 def update_client(cid, **fields):
@@ -386,6 +395,8 @@ def update_client(cid, **fields):
                 c.update(fields)
                 if "enabled" in fields:
                     c["disabled_reason"] = None if c["enabled"] else "manual"
+                    if not c["enabled"]:
+                        c["disabled_at"] = int(time.time())
                 elif (not c["enabled"] and c.get("disabled_reason") in ("expired", "limit")
                       and not over_limit(c)
                       and not (c.get("expires") and c["expires"] < time.time())):

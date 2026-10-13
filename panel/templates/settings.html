@@ -44,6 +44,62 @@
   </form>
 </div>
 
+<div class="card" id="telegram">
+  <h2>Уведомления в Telegram</h2>
+  <ol class="muted small steps">
+    <li>В Telegram откройте <b>@BotFather</b> → <code>/newbot</code> → придумайте имя → скопируйте токен.</li>
+    <li>Откройте своего нового бота и нажмите <b>«Старт»</b>.</li>
+    <li>Вставьте токен ниже, нажмите <b>«Найти мой chat id»</b>, затем <b>«Отправить тест»</b>.</li>
+  </ol>
+  <form method="post" class="form-grid">
+    <input type="hidden" name="csrf" value="{{ csrf_token() }}">
+    <label>Токен бота <input name="token" value="{{ token_masked }}" placeholder="123456789:AA…" autocomplete="off"></label>
+    <label><span>Chat id {% if notify.chat_title %}<span class="muted">({{ notify.chat_title }})</span>{% endif %}</span>
+      <input name="chat_id" value="{{ notify.chat_id }}" placeholder="заполнится кнопкой ниже"></label>
+    <label>Сводка каждый день в (час)
+      <input name="hour" type="number" min="0" max="23" value="{{ notify.hour }}"></label>
+    <label>Часовой пояс <input name="tz" value="{{ notify.tz }}" placeholder="Europe/Moscow"></label>
+    <label class="check"><span><input type="checkbox" name="digest" {{ 'checked' if notify.digest }}>
+      Утренняя сводка: кто истекает, кто отключился</span></label>
+    <label class="check"><span><input type="checkbox" name="alerts" {{ 'checked' if notify.alerts }}>
+      Сразу: отключение клиента, падение туннеля</span></label>
+    <label class="check"><span><input type="checkbox" name="send_backup" {{ 'checked' if notify.send_backup }}>
+      Присылать ночную резервную копию</span></label>
+    <div class="btn-row">
+      <button name="action" value="notify">Сохранить</button>
+      <button name="action" value="tg_find" class="secondary">Найти мой chat id</button>
+      <button name="action" value="tg_test" class="secondary">Отправить тест</button>
+    </div>
+  </form>
+  <p class="muted small">В резервной копии — ключи всех клиентов. Присылайте её только в личный чат
+     с ботом, не в группу.</p>
+</div>
+
+<div class="card" id="backups">
+  <h2>Резервные копии</h2>
+  <p class="muted small">Каждую ночь в 03:00 ({{ notify.tz }}) сохраняется копия клиентов, ключей и настроек;
+     хранятся последние 14. Каталог на сервере: <code>{{ backup_dir }}</code>.
+     Перенос на новый сервер: <code>bash install.sh --restore файл.tar.gz</code></p>
+  <form method="post" class="inline">
+    <input type="hidden" name="csrf" value="{{ csrf_token() }}">
+    <button name="action" value="backup_now">Сделать копию сейчас</button>
+  </form>
+  {% if backups %}
+  <table class="backups">
+    {% for b in backups %}
+    <tr>
+      <td><code>{{ b.name }}</code></td>
+      <td class="muted">{{ b.mtime | ago }}</td>
+      <td class="muted">{{ b.size | bytes }}</td>
+      <td><a class="btn small" href="{{ url_for('backup_download', name=b.name) }}">Скачать</a></td>
+    </tr>
+    {% endfor %}
+  </table>
+  {% else %}
+  <p class="muted">Копий пока нет.</p>
+  {% endif %}
+</div>
+
 <div class="card">
   <h2>Пароль панели</h2>
   <form method="post" class="form-grid">

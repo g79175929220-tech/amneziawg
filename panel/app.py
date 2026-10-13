@@ -17,6 +17,7 @@ from werkzeug.exceptions import HTTPException
 from werkzeug.security import check_password_hash, generate_password_hash
 
 import awg
+import jobs
 
 PANEL_FILE = os.path.join(awg.STATE_DIR, "panel.json")
 
@@ -400,6 +401,37 @@ def _settings():
             elif action == "restart":
                 awg.apply(state, restart=True)
                 flash("Интерфейс перезапущен", "ok")
+            elif action == "backup_now":
+                path = jobs.make_backup()
+                flash(f"Резервная копия создана: {os.path.basename(path)}", "ok")
+            elif action in ("notify", "tg_find", "tg_test"):
+                n = jobs.settings(state)
+                token = request.form.get("token", "").strip()
+                if token and not token.startswith("•"):     # «••••» — токен не меняли
+                    if not re.fullmatch(r"\d{5,}:[\w-]{20,}", token):
+                        raise ValueError("Токен бота выглядит неправильно — скопируйте его из @BotFather целиком")
+                    if token != n["token"]:
+                        n["chat_id"], n["chat_title"] = "", ""
+                    n["token"] = token
+                if action == "notify":
+                    n["chat_id"] = request.form.get("chat_id", "").strip() or n["chat_id"]
+                    for k in ("digest", "alerts", "send_backup"):
+                        n[k] = request.form.get(k) == "on"
+                    n["hour"] = max(0, min(23, int(request.form.get("hour") or 10)))
+                    n["tz"] = request.form.get("tz", "").strip() or "Europe/Moscow"
+                    flash("Настройки уведомлений сохранены", "ok")
+                elif action == "tg_find":
+                    if not n["token"]:
+                        raise ValueError("Сначала вставьте токен бота")
+                    n["chat_id"], n["chat_title"] = jobs.find_chat(n["token"])
+                    flash(f"Найден чат: {n['chat_title'] or n['chat_id']}", "ok")
+                state["notify"] = n
+                awg.save(state)
+                if action == "tg_test":
+                    if not (n["token"] and n["chat_id"]):
+                        raise ValueError("Нужны токен бота и chat id")
+                    jobs.send("✅ Панель AmneziaWG подключена к Telegram.\n\n" + jobs.digest_text(state), n)
+                    flash("Тестовое сообщение отправлено — проверьте Telegram", "ok")
             elif action == "password":
                 cfg = load_panel()
                 if not check_password_hash(cfg["password_hash"], request.form["old"]):
@@ -414,7 +446,22 @@ def _settings():
             flash(f"Ошибка: {e}", "err")
         return redirect(url_for("settings"))
     keys = awg.params_for(s["proto"])
-    return render_template("settings.html", s=s, keys=keys, server_conf=awg.server_conf(state))
+    n = jobs.settings(state)
+    masked = ("•" * 8 + n["token"][-4:]) if n["token"] else ""
+    return render_template("settings.html", s=s, keys=keys, server_conf=awg.server_conf(state),
+                           notify=n, token_masked=masked, backups=jobs.list_backups(),
+                           backup_dir=jobs.BACKUP_DIR)
+
+
+@app.get("/backups/<name>")
+def backup_download(name):
+    path = jobs.backup_path(name)
+    if not path:
+        abort(404)
+    with open(path, "rb") as f:
+        data = f.read()
+    return Response(data, mimetype="application/gzip",
+                    headers={"Content-Disposition": f'attachment; filename="{name}"', "Cache-Control": "no-store"})
 
 
 def cli():
@@ -466,9 +513,15 @@ def _check_loop():
     while True:
         time.sleep(15)
         try:
-            awg.check()
+            events, up = awg.check()
         except Exception as e:  # noqa: BLE001
             app.logger.warning("Проверка трафика и сроков клиентов: %s", e)
+            events, up = [], False
+        try:
+            # Уведомления в Telegram, ночная резервная копия, утренняя сводка.
+            jobs.tick(events, up, log=app.logger.warning)
+        except Exception as e:  # noqa: BLE001
+            app.logger.warning("Фоновые задачи: %s", e)
 
 
 if __name__ != "__main__" and os.environ.get("AWG_PANEL_NO_BG") != "1":

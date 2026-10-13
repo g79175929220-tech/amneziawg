@@ -2,6 +2,7 @@
 # Установщик сервера AmneziaWG 3.1 и веб-панели (Ubuntu 20.04+ / Debian 11+).
 # Запуск: sudo bash install.sh [--port 51820] [--panel-port 8443] [--endpoint IP]
 #                              [--proto 3|2|1] [--iface awg3] [--subnet 10.9.0.0/24]
+#                              [--restore awg-backup-....tar.gz]   перенос с другого сервера
 #
 # AmneziaWG 3.1 ставится изолированно в /opt/awg3 (userspace amneziawg-go + awg-tools 3.1),
 # конфиги — в /etc/awg3, юнит — awg3-quick@. Системные awg/awg-quick, модуль ядра и уже
@@ -20,6 +21,7 @@ ENDPOINT=""
 PROTO=3
 IFACE=""
 SUBNET=""
+RESTORE=""
 USER_PORT=0
 SRC_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
@@ -31,6 +33,7 @@ while [[ $# -gt 0 ]]; do
     --proto) PROTO="$2"; shift 2 ;;
     --iface) IFACE="$2"; shift 2 ;;
     --subnet) SUBNET="$2"; shift 2 ;;
+    --restore) RESTORE="$(realpath "$2")"; shift 2 ;;
     *) echo "Неизвестный параметр: $1"; exit 1 ;;
   esac
 done
@@ -130,6 +133,17 @@ iface_taken() {
     || [[ -f "/etc/wireguard/$1.conf" ]]
 }
 
+if [[ -n "$RESTORE" ]]; then
+  [[ -f "$RESTORE" ]] || { echo "Файл копии не найден: $RESTORE"; exit 1; }
+  log "Восстановление из копии $(basename "$RESTORE")"
+  if [[ -f "$STATE" ]]; then
+    # Здесь уже есть панель — сначала сохраняем её текущее состояние.
+    log "На сервере уже есть клиенты — сохраняю их копию перед восстановлением"
+    AWG_PANEL_DIR=/etc/awg-panel python3 "$SRC_DIR/panel/jobs.py" backup
+  fi
+  AWG_PANEL_DIR=/etc/awg-panel python3 "$SRC_DIR/panel/jobs.py" restore "$RESTORE"
+fi
+
 log "Проверка, что не мешаем существующим туннелям"
 if command -v docker >/dev/null && docker ps --format '{{.Names}}' 2>/dev/null | grep -qi amnezia; then
   warn "Найдены Docker-контейнеры Amnezia: $(docker ps --format '{{.Names}}' | grep -i amnezia | tr '\n' ' ')— они продолжат работать"
@@ -200,6 +214,11 @@ python3 -m venv /opt/awg-panel/venv
 
 export PATH="$PREFIX/bin:$PATH" AWG_CONF_DIR="$CONF_DIR" AWG_SERVICE="awg3-quick@{iface}"
 PANEL_PY="/opt/awg-panel/venv/bin/python /opt/awg-panel/app.py"
+
+if [[ -n "$RESTORE" ]]; then
+  # Новый сервер: другой внешний интерфейс и, возможно, IP (если Endpoint был IP, а не домен).
+  /opt/awg-panel/venv/bin/python /opt/awg-panel/jobs.py fixup --public-ip "$ENDPOINT" --wan "$WAN"
+fi
 
 $PANEL_PY init --endpoint "$ENDPOINT" --port "$AWG_PORT" --wan "$WAN" --proto "$PROTO" \
   --iface "$IFACE" ${SUBNET:+--subnet "$SUBNET"}
