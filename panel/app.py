@@ -18,6 +18,7 @@ from werkzeug.security import check_password_hash, generate_password_hash
 
 import awg
 import jobs
+import totp
 
 PANEL_FILE = os.path.join(awg.STATE_DIR, "panel.json")
 
@@ -79,7 +80,7 @@ app.jinja_env.globals["csrf_token"] = csrf_token
 
 @app.before_request
 def guard():
-    if request.endpoint in ("login", "static", "share_page", "share_redeem"):
+    if request.endpoint in ("login", "login_2fa", "static", "share_page", "share_redeem"):
         return
     is_api = request.path.startswith("/api/")
     if not session.get("auth"):
@@ -106,27 +107,74 @@ def api_http_error(e):
     return {"error": msg}, e.code
 
 
+def _too_many(ip):
+    fails = [t for t in _failed.get(ip, []) if time.time() - t < 900]
+    _failed[ip] = fails
+    return len(fails) >= 5
+
+
+def _fail(ip, msg):
+    _failed.setdefault(ip, []).append(time.time())
+    time.sleep(1)
+    flash(msg, "err")
+
+
+def _login_ok(message=None):
+    session.clear()                       # сначала очистка, потом сообщение — иначе оно пропадёт
+    session.permanent = True
+    session["auth"] = True
+    _failed.pop(request.remote_addr, None)
+    if message:
+        flash(message, "ok")
+    return redirect(url_for("index"))
+
+
 @app.route("/login", methods=["GET", "POST"])
 def login():
     if request.method == "POST":
         ip = request.remote_addr
-        fails = [t for t in _failed.get(ip, []) if time.time() - t < 900]
-        if len(fails) >= 5:
+        if _too_many(ip):
             flash("Слишком много попыток. Подождите 15 минут.", "err")
             return render_template("login.html"), 429
         cfg = load_panel()
         if (hmac.compare_digest(request.form.get("username", "").encode(), cfg["username"].encode())
                 and check_password_hash(cfg["password_hash"], request.form.get("password", ""))):
-            session.clear()
-            session.permanent = True
-            session["auth"] = True
-            _failed.pop(ip, None)
-            return redirect(url_for("index"))
-        fails.append(time.time())
-        _failed[ip] = fails
-        time.sleep(1)
-        flash("Неверный логин или пароль", "err")
+            if cfg.get("totp_enabled"):
+                # Пароль верен — второй шаг: код из приложения. 5 минут на ввод.
+                session.clear()
+                session["pending_2fa"] = int(time.time())
+                return redirect(url_for("login_2fa"))
+            return _login_ok()
+        _fail(ip, "Неверный логин или пароль")
     return render_template("login.html")
+
+
+@app.route("/login/2fa", methods=["GET", "POST"])
+def login_2fa():
+    started = session.get("pending_2fa")
+    if not started or time.time() - started > 300:
+        session.clear()
+        return redirect(url_for("login"))
+    if request.method == "POST":
+        ip = request.remote_addr
+        if _too_many(ip):
+            flash("Слишком много попыток. Подождите 15 минут.", "err")
+            return render_template("login.html", step="2fa"), 429
+        code = request.form.get("code", "")
+        with awg._lock:
+            cfg = load_panel()
+            step = totp.verify(cfg["totp_secret"], code, last_counter=cfg.get("totp_last"))
+            if step is not None:
+                cfg["totp_last"] = step               # тот же код повторно не пройдёт
+                save_panel(cfg)
+                return _login_ok()
+            h = totp.hash_recovery(code)
+            if code.strip() and h in cfg.get("totp_recovery", []):
+                cfg["totp_recovery"].remove(h)        # запасной код — одноразовый
+                save_panel(cfg)
+                return _login_ok(f"Вход по запасному коду. Осталось кодов: {len(cfg['totp_recovery'])}")
+        _fail(ip, "Неверный код")
+    return render_template("login.html", step="2fa")
 
 
 @app.post("/logout")
@@ -432,6 +480,8 @@ def _settings():
                         raise ValueError("Нужны токен бота и chat id")
                     jobs.send("✅ Панель AmneziaWG подключена к Telegram.\n\n" + jobs.digest_text(state), n)
                     flash("Тестовое сообщение отправлено — проверьте Telegram", "ok")
+            elif action in ("2fa_start", "2fa_confirm", "2fa_cancel", "2fa_disable", "2fa_codes"):
+                _settings_2fa(action)
             elif action == "password":
                 cfg = load_panel()
                 if not check_password_hash(cfg["password_hash"], request.form["old"]):
@@ -448,9 +498,62 @@ def _settings():
     keys = awg.params_for(s["proto"])
     n = jobs.settings(state)
     masked = ("•" * 8 + n["token"][-4:]) if n["token"] else ""
+    cfg = load_panel()
+    tfa = {"enabled": bool(cfg.get("totp_enabled")), "left": len(cfg.get("totp_recovery", [])),
+           "codes": session.pop("show_recovery", None)}
+    if session.get("totp_setup") and not tfa["enabled"]:
+        sec = session["totp_setup"]
+        uri = totp.uri(sec, cfg["username"], f"AmneziaWG {s['endpoint']}")
+        img = qrcode.make(uri, image_factory=qrcode.image.svg.SvgPathImage, box_size=8, border=2)
+        buf = io.BytesIO()
+        img.save(buf)
+        tfa.update(setup=True, secret=" ".join(sec[i:i + 4] for i in range(0, len(sec), 4)),
+                   qr=buf.getvalue().decode())
     return render_template("settings.html", s=s, keys=keys, server_conf=awg.server_conf(state),
-                           notify=n, token_masked=masked, backups=jobs.list_backups(),
+                           notify=n, token_masked=masked, tfa=tfa, backups=jobs.list_backups(),
                            backup_dir=jobs.BACKUP_DIR)
+
+
+def _settings_2fa(action):
+    """Двухфакторный вход: включение (QR → код), отключение, новые запасные коды."""
+    cfg = load_panel()
+    code = request.form.get("code", "")
+    if action == "2fa_start":
+        session["totp_setup"] = totp.new_secret()     # в panel.json — только после подтверждения
+        return
+    if action == "2fa_cancel":
+        session.pop("totp_setup", None)
+        return
+    if action == "2fa_confirm":
+        sec = session.get("totp_setup")
+        step = sec and totp.verify(sec, code)
+        if step is None or not sec:
+            raise ValueError("Код не подошёл. Проверьте, что время на телефоне выставлено автоматически")
+        codes = totp.new_recovery_codes()
+        cfg.update(totp_enabled=True, totp_secret=sec, totp_last=step,
+                   totp_recovery=[totp.hash_recovery(c) for c in codes])
+        save_panel(cfg)
+        session.pop("totp_setup", None)
+        session["show_recovery"] = codes
+        flash("Двухфакторный вход включён. Сохраните запасные коды — они показываются один раз", "ok")
+        return
+    # Отключение и новые коды — только с подтверждением кодом из приложения.
+    step = totp.verify(cfg.get("totp_secret", ""), code, last_counter=cfg.get("totp_last"))
+    if step is None:
+        raise ValueError("Неверный код из приложения (если вы только что вошли этим кодом — дождитесь следующего)")
+    cfg["totp_last"] = step
+    if action == "2fa_disable":
+        if not check_password_hash(cfg["password_hash"], request.form.get("password", "")):
+            raise ValueError("Неверный пароль")
+        for k in ("totp_enabled", "totp_secret", "totp_last", "totp_recovery"):
+            cfg.pop(k, None)
+        flash("Двухфакторный вход отключён", "ok")
+    else:
+        codes = totp.new_recovery_codes()
+        cfg["totp_recovery"] = [totp.hash_recovery(c) for c in codes]
+        session["show_recovery"] = codes
+        flash("Новые запасные коды созданы, старые больше не действуют", "ok")
+    save_panel(cfg)
 
 
 @app.get("/backups/<name>")
@@ -482,6 +585,7 @@ def cli():
     pw.add_argument("--username", default="admin")
     pw.add_argument("password")
     sub.add_parser("render", help="записать серверный конфиг из state.json")
+    sub.add_parser("disable-2fa", help="отключить двухфакторный вход (если потерян телефон и коды)")
     a = p.parse_args()
     with awg._lock:
         _run_cli(a)
@@ -507,6 +611,12 @@ def _run_cli(a):
         save_panel(cfg)
     elif a.cmd == "render":
         awg.write_conf(awg.load())
+    elif a.cmd == "disable-2fa":
+        cfg = load_panel()
+        for k in ("totp_enabled", "totp_secret", "totp_last", "totp_recovery"):
+            cfg.pop(k, None)
+        save_panel(cfg)
+        print("Двухфакторный вход отключён. Войдите по паролю и включите его заново в настройках.")
 
 
 def _check_loop():

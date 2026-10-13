@@ -1,11 +1,23 @@
 {% extends "base.html" %}
 {% block body %}
 <div class="card narrow">
+  {% if step == "2fa" %}
+  <h1>Код подтверждения</h1>
+  <p class="muted small">Откройте приложение-аутентификатор (Google Authenticator, Яндекс Ключ…)
+     и введите 6 цифр для «AmneziaWG». Потеряли телефон — введите запасной код.</p>
+  <form method="post" action="{{ url_for('login_2fa') }}">
+    <label>Код <input name="code" inputmode="numeric" autocomplete="one-time-code" maxlength="12"
+                      required autofocus placeholder="123 456" class="otp"></label>
+    <button>Войти</button>
+  </form>
+  <p class="small"><a href="{{ url_for('login') }}">← назад</a></p>
+  {% else %}
   <h1>Вход в панель</h1>
   <form method="post">
     <label>Логин <input name="username" autocomplete="username" required autofocus></label>
     <label>Пароль <input name="password" type="password" autocomplete="current-password" required></label>
     <button>Войти</button>
   </form>
+  {% endif %}
 </div>
 {% endblock %}

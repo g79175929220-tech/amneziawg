@@ -100,6 +100,59 @@
   {% endif %}
 </div>
 
+<div class="card" id="twofa">
+  <h2>Двухфакторный вход {% if tfa.enabled %}<span class="chip ok">включён</span>{% else %}<span class="chip bad">выключен</span>{% endif %}</h2>
+  {% if tfa.codes %}
+  <div class="flash ok">
+    <b>Запасные коды — сохраните их сейчас</b> (скриншот, заметки, бумажка). Каждый срабатывает один раз,
+    если под рукой нет телефона. Больше они не покажутся.
+    <pre class="codes">{% for c in tfa.codes %}{{ c }}
+{% endfor %}</pre>
+  </div>
+  {% endif %}
+  {% if tfa.enabled %}
+  <p class="muted small">При входе после пароля нужен 6-значный код из приложения.
+     Осталось запасных кодов: <b>{{ tfa.left }}</b>.</p>
+  <form method="post" class="form-grid">
+    <input type="hidden" name="csrf" value="{{ csrf_token() }}">
+    <label>Код из приложения <input name="code" inputmode="numeric" autocomplete="one-time-code" required></label>
+    <label>Пароль (для отключения) <input name="password" type="password" autocomplete="current-password"></label>
+    <div class="btn-row">
+      <button name="action" value="2fa_codes" class="secondary">Новые запасные коды</button>
+      <button name="action" value="2fa_disable" class="danger">Отключить</button>
+    </div>
+  </form>
+  {% elif tfa.setup %}
+  <div class="two">
+    <div class="qr-box">{{ tfa.qr|safe }}</div>
+    <div>
+      <ol class="muted small steps">
+        <li>Установите на телефон <b>Google Authenticator</b>, <b>Яндекс Ключ</b> или <b>Microsoft Authenticator</b>.</li>
+        <li>В приложении: «+» → «Сканировать QR-код» и наведите камеру на код слева.
+            Нет камеры — «Ввести ключ вручную»: <code class="secret">{{ tfa.secret }}</code></li>
+        <li>Введите 6 цифр, которые показало приложение.</li>
+      </ol>
+      <form method="post" class="form-grid">
+        <input type="hidden" name="csrf" value="{{ csrf_token() }}">
+        <label>Код из приложения <input name="code" inputmode="numeric" autocomplete="one-time-code" required autofocus></label>
+        <div class="btn-row">
+          <button name="action" value="2fa_confirm">Подтвердить и включить</button>
+          <button name="action" value="2fa_cancel" class="secondary" formnovalidate>Отмена</button>
+        </div>
+      </form>
+    </div>
+  </div>
+  {% else %}
+  <p class="muted small">Даже если пароль панели утечёт, без кода с вашего телефона войти не получится.</p>
+  <form method="post" class="inline">
+    <input type="hidden" name="csrf" value="{{ csrf_token() }}">
+    <button name="action" value="2fa_start">Включить</button>
+  </form>
+  {% endif %}
+  <p class="muted small">Потеряли и телефон, и запасные коды: на сервере выполните
+     <code>/opt/awg-panel/venv/bin/python /opt/awg-panel/app.py disable-2fa</code></p>
+</div>
+
 <div class="card">
   <h2>Пароль панели</h2>
   <form method="post" class="form-grid">

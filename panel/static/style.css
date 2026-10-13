@@ -259,3 +259,13 @@ label.check span { display: flex; align-items: center; gap: 8px; }
 table.backups { width: 100%; border-collapse: collapse; margin-top: 14px; font-size: 14px; }
 table.backups td { padding: 8px 6px; border-top: 1px solid var(--line); white-space: nowrap; }
 table.backups td:first-child { white-space: normal; word-break: break-all; }
+
+/* ---------- двухфакторный вход */
+h2 .chip { font-size: 12px; vertical-align: middle; margin-left: 6px; }
+pre.codes { margin: 10px 0 0; font-size: 16px; line-height: 1.7; letter-spacing: .05em; background: var(--card); color: var(--fg); }
+code.secret { word-break: break-all; }
+input.otp { font-size: 22px; letter-spacing: .2em; text-align: center; }
+#twofa .two { grid-template-columns: 220px 1fr; }
+@media (max-width: 640px) { #twofa .two { grid-template-columns: 1fr; } #twofa .qr-box { max-width: 240px; } }
+#twofa .two { display: grid; gap: 20px; align-items: start; }
+.qr-box svg { display: block; width: 100%; height: auto; }
