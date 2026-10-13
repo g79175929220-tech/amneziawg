@@ -93,6 +93,30 @@ cd amneziawg && sudo bash install.sh --restore /root/awg-backup-20261013-030000.
 
 Если упадёт сама панель, она не сможет об этом сообщить — для этого нужен внешний мониторинг.
 
+## Безопасность
+
+### Двухфакторный вход в панель
+**Настройки → Двухфакторный вход → Включить**: отсканируйте QR-код в Google Authenticator / Яндекс Ключе,
+введите код и сохраните 8 запасных кодов. После этого при входе, кроме пароля, нужен код с телефона.
+Потеряли телефон и коды: `/opt/awg-panel/venv/bin/python /opt/awg-panel/app.py disable-2fa`.
+
+### Защита SSH (`secure-ssh.sh`)
+fail2ban банит IP после 5 неудачных попыток входа, вход в SSH — только по ключу.
+
+1. Ключ в Windows: **PuTTYgen** → EdDSA (Ed25519) → Generate → «Save private key» (.ppk) →
+   скопируйте строку из поля «Public key for pasting into OpenSSH authorized_keys file».
+2. На сервере:
+   ```bash
+   curl -fsSLO https://raw.githubusercontent.com/g79175929220-tech/amneziawg/claude/amnesiawg-web-panel-1kuz00/secure-ssh.sh
+   bash secure-ssh.sh --add-key "ssh-ed25519 AAAA... (ваша строка)"
+   ```
+3. Не закрывая окно, откройте новое окно PuTTY с ключом (Connection → SSH → Auth → Credentials → .ppk).
+   Вошли — `bash secure-ssh.sh --confirm`. Не вошли — `bash secure-ssh.sh --rollback`
+   (или подождите 10 минут: вход по паролю вернётся сам).
+
+Без ключа скрипт ставит только fail2ban и пароли не отключает. Ваш текущий IP fail2ban не банит.
+Состояние: `bash secure-ssh.sh --status`.
+
 ## Официальный сертификат для панели (вместо самоподписанного)
 
 Бесплатный сертификат Let's Encrypt выдаётся на домен, поэтому нужен домен, указывающий на сервер:
