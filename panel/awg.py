@@ -137,7 +137,7 @@ def save(state):
 
 
 def init_state(endpoint, port, wan, subnet="10.8.0.0/24", dns="1.1.1.1, 1.0.0.1",
-               proto=3, iface="awg3", mtu=1376):
+               proto=3, iface="awg3", mtu=1280):
     net = ipaddress.ip_network(subnet, strict=False)
     priv, pub = genkey()
     state = {
@@ -188,9 +188,11 @@ def server_conf(state):
         f"MTU = {s['mtu']}",
         *obfs_lines(s),
         f"PostUp = iptables -t nat -A POSTROUTING -s {sub} -o {wan} -j MASQUERADE; "
-        f"iptables -I FORWARD -i {ifc} -j ACCEPT; iptables -I FORWARD -o {ifc} -j ACCEPT",
+        f"iptables -I FORWARD -i {ifc} -j ACCEPT; iptables -I FORWARD -o {ifc} -j ACCEPT; "
+        + "; ".join("iptables " + " ".join(r) for r in mss_rules(ifc, "-A")),
         f"PostDown = iptables -t nat -D POSTROUTING -s {sub} -o {wan} -j MASQUERADE; "
-        f"iptables -D FORWARD -i {ifc} -j ACCEPT; iptables -D FORWARD -o {ifc} -j ACCEPT",
+        f"iptables -D FORWARD -i {ifc} -j ACCEPT; iptables -D FORWARD -o {ifc} -j ACCEPT; "
+        + "; ".join("iptables " + " ".join(r) for r in mss_rules(ifc, "-D")),
     ]
     for c in state["clients"]:
         if not c["enabled"]:
@@ -200,6 +202,29 @@ def server_conf(state):
                   f"PresharedKey = {c['psk']}",
                   f"AllowedIPs = {c['ip']}/32"]
     return "\n".join(lines) + "\n"
+
+
+def mss_rules(ifc, op):
+    """TCP MSS под MTU туннеля в обе стороны: без этого крупные TCP-пакеты (видео, загрузки)
+    теряются там, где путь уже, чем MTU, и загрузка «зависает»."""
+    return [["-t", "mangle", op, "FORWARD", d, ifc, "-p", "tcp", "--tcp-flags", "SYN,RST", "SYN",
+             "-j", "TCPMSS", "--clamp-mss-to-pmtu"] for d in ("-o", "-i")]
+
+
+def apply_live_net(state):
+    """MTU и MSS-правила для уже работающего интерфейса — без перезапуска, клиенты не отключаются."""
+    s = state["server"]
+    ifc = s["iface"]
+    try:
+        with open(f"/sys/class/net/{ifc}/mtu") as f:
+            cur = int(f.read())
+    except OSError:
+        return
+    if cur != int(s["mtu"]):
+        run(["ip", "link", "set", "dev", ifc, "mtu", str(s["mtu"])])
+    for r in mss_rules(ifc, "-C"):
+        if subprocess.run(["iptables", *r], capture_output=True).returncode != 0:
+            run(["iptables", *[("-A" if x == "-C" else x) for x in r]])
 
 
 def client_endpoint(state, c):
@@ -265,6 +290,7 @@ def apply(state, restart=False):
             run(["awg", "syncconf", ifc, tmp])
         finally:
             os.unlink(tmp)
+        apply_live_net(state)
 
 
 def next_ip(state):
