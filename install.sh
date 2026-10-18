@@ -69,8 +69,29 @@ install_go() {
   export PATH=/usr/local/go/bin:$PATH
 }
 
+# Сборка Go на сервере с 1 ГБ памяти без подкачки может быть убита OOM-killer'ом.
+# На время сборки добавляем временный swap-файл и потом убираем его.
+TMP_SWAP=/swapfile-awg-build
+add_build_swap() {
+  local mem_kb swap_kb
+  mem_kb=$(awk '/^MemTotal:/{print $2}' /proc/meminfo)
+  swap_kb=$(awk '/^SwapTotal:/{print $2}' /proc/meminfo)
+  if (( mem_kb < 1600000 && swap_kb < 512000 )) && [[ ! -e $TMP_SWAP ]]; then
+    log "Мало памяти ($((mem_kb / 1024)) МБ) — временный файл подкачки 1 ГБ на время сборки"
+    if fallocate -l 1G "$TMP_SWAP" 2>/dev/null || dd if=/dev/zero of="$TMP_SWAP" bs=1M count=1024 status=none; then
+      chmod 600 "$TMP_SWAP" && mkswap "$TMP_SWAP" >/dev/null && swapon "$TMP_SWAP" \
+        || { warn "Не удалось включить подкачку — пробую собрать без неё"; rm -f "$TMP_SWAP"; }
+    fi
+  fi
+}
+remove_build_swap() {
+  if [[ -e $TMP_SWAP ]]; then swapoff "$TMP_SWAP" 2>/dev/null || true; rm -f "$TMP_SWAP"; fi
+}
+
 build_awg3() {
   local build; build=$(mktemp -d)
+  add_build_swap
+  trap remove_build_swap EXIT
   install_go
   log "Сборка amneziawg-go $AWG_GO_TAG"
   git clone -q --depth 1 -b "$AWG_GO_TAG" https://github.com/amnezia-vpn/amneziawg-go "$build/go"
@@ -97,6 +118,8 @@ open(p, "w").write(s)
 PY
   echo "$AWG_GO_TAG $AWG_TOOLS_TAG" > "$PREFIX/VERSION"
   rm -rf "$build"
+  remove_build_swap
+  trap - EXIT
 }
 
 if [[ "$(cat "$PREFIX/VERSION" 2>/dev/null)" == "$AWG_GO_TAG $AWG_TOOLS_TAG" ]]; then
