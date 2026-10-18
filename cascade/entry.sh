@@ -1,17 +1,20 @@
 #!/usr/bin/env bash
-# Входной сервер каскада AmneziaWG: пересылает UDP с этого сервера на выходной.
+# Входной сервер каскада AmneziaWG: пересылает UDP с этого сервера на выходные.
 #
-#   телефон ──► этот сервер (РФ) ──► выходной сервер с AmneziaWG ──► интернет
+#   телефон ──► этот сервер (РФ) :443  ──► выходной сервер 1 ──► интернет
+#   телефон ──► этот сервер (РФ) :8443 ──► выходной сервер 2 ──► интернет
 #
 # Пакеты пересылаются как есть (DNAT), ничего не расшифровывается и ключи здесь
-# не нужны — обфускация AmneziaWG сохраняется на всём пути.
+# не нужны — обфускация AmneziaWG сохраняется на всём пути. Маршрутов может быть
+# несколько: каждый на своём UDP-порту этого сервера.
 #
-# Установка:  sudo bash entry.sh --exit 89.125.27.15:51820 [--port 443]
-# Статус:     sudo bash entry.sh --status
-# Удаление:   sudo bash entry.sh --remove
+# Добавить маршрут:  sudo bash entry.sh --exit 89.125.27.15:51820 --port 443
+# Статус:            sudo bash entry.sh --status
+# Удалить маршрут:   sudo bash entry.sh --remove 443        (все: --remove all)
 set -euo pipefail
 
-CONF=/etc/awg-cascade.conf
+CONF_DIR=/etc/awg-cascade.d
+LEGACY_CONF=/etc/awg-cascade.conf          # версия с одним маршрутом
 RULES=/usr/local/sbin/awg-cascade-rules
 UNIT=/etc/systemd/system/awg-cascade.service
 
@@ -19,77 +22,24 @@ log() { echo -e "\e[1;32m==>\e[0m $*"; }
 die() { echo -e "\e[1;31m!!\e[0m $*" >&2; exit 1; }
 [[ $EUID -eq 0 ]] || die "Запустите от имени root"
 
-EXIT=""; PORT=""; ACTION=install
+EXIT=""; PORT=""; ACTION=install; RM_PORT=""
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --exit) EXIT="$2"; shift 2 ;;
     --port) PORT="$2"; shift 2 ;;
-    --remove) ACTION=remove; shift ;;
+    --remove) ACTION=remove; RM_PORT="${2:-}"; shift; [[ -n "$RM_PORT" ]] && shift ;;
     --status) ACTION=status; shift ;;
     *) die "Неизвестный параметр: $1" ;;
   esac
 done
 
-if [[ $ACTION == status ]]; then
-  [[ -f $CONF ]] && cat $CONF || echo "Каскад не настроен"
-  systemctl is-active awg-cascade 2>/dev/null || true
-  iptables -t nat -S AWG_CASCADE_PRE 2>/dev/null || true
-  iptables -t nat -L AWG_CASCADE_PRE -v -n 2>/dev/null | tail -n +3 || true
-  exit 0
-fi
+ufw_on() { command -v ufw >/dev/null && ufw status | grep -q active; }
 
-if [[ $ACTION == remove ]]; then
-  systemctl disable --now awg-cascade 2>/dev/null || true
-  [[ -x $RULES ]] && $RULES down || true
-  if [[ -f $CONF ]] && command -v ufw >/dev/null && ufw status | grep -q active; then
-    . $CONF; ufw delete allow "$LISTEN_PORT/udp" >/dev/null || true
-  fi
-  rm -f $UNIT $RULES $CONF /etc/sysctl.d/99-awg-cascade.conf
-  systemctl daemon-reload
-  log "Каскад удалён"
-  exit 0
-fi
-
-[[ -n "$EXIT" ]] || die "Укажите выходной сервер: --exit IP:порт"
-EXIT_HOST=${EXIT%:*}; EXIT_PORT=${EXIT##*:}
-[[ "$EXIT_PORT" =~ ^[0-9]+$ && "$EXIT_HOST" != "$EXIT" ]] || die "Формат --exit: IP:порт (например 89.125.27.15:51820)"
-EXIT_IP=$(getent ahostsv4 "$EXIT_HOST" | awk 'NR==1{print $1}')
-[[ -n "$EXIT_IP" ]] || die "Не удалось определить IP для $EXIT_HOST"
-LISTEN_PORT=${PORT:-$EXIT_PORT}
-WAN=$(ip -4 route show default | awk '{for(i=1;i<=NF;i++) if($i=="dev"){print $(i+1); exit}}')
-[[ -n "$WAN" ]] || die "Не найден внешний интерфейс"
-
-if ss -Huln "sport = :$LISTEN_PORT" | grep -q .; then
-  die "UDP-порт $LISTEN_PORT на этом сервере уже занят — выберите другой: --port 51821"
-fi
-# Порты уже работающих WireGuard/AmneziaWG на этом сервере — их не перехватываем.
-for tool in wg awg; do
-  command -v $tool >/dev/null || continue
-  if $tool show all listen-port 2>/dev/null | awk '{print $2}' | grep -qx "$LISTEN_PORT"; then
-    die "UDP-порт $LISTEN_PORT занят туннелем $tool ($($tool show all listen-port | awk -v p=$LISTEN_PORT '$2==p{print $1}')) — выберите другой, например --port 8443"
-  fi
-done
-# Порты, опубликованные Docker (Amnezia ставит WireGuard/AWG в контейнеры). Проверяем
-# правила DNAT Docker — они есть, даже если docker-proxy отключён и ss порт не видит.
-if iptables -t nat -S DOCKER 2>/dev/null | grep -E -- "-p udp" | grep -qE -- "--dport $LISTEN_PORT( |\$)"; then
-  die "UDP-порт $LISTEN_PORT опубликован Docker-контейнером ($(docker ps --format '{{.Names}} {{.Ports}}' 2>/dev/null | grep -E ":$LISTEN_PORT->" | awk '{print $1}' | tr '\n' ' ')) — выберите другой, например --port 8443"
-fi
-if ip -4 -o addr | awk '{sub(/\/.*/,"",$4); print $4}' | grep -qx "$EXIT_IP"; then
-  die "$EXIT_IP — это адрес самого этого сервера. В --exit укажите выходной сервер с AmneziaWG"
-fi
-
-log "Пересылка UDP :$LISTEN_PORT ($WAN) → $EXIT_IP:$EXIT_PORT"
-cat > $CONF <<EOF
-EXIT_IP=$EXIT_IP
-EXIT_PORT=$EXIT_PORT
-LISTEN_PORT=$LISTEN_PORT
-WAN=$WAN
-EOF
-
-cat > $RULES <<'EOF'
+write_rules_script() {
+  cat > $RULES <<'EOF'
 #!/bin/bash
-# Правила каскада. Всё в собственных цепочках AWG_CASCADE_* — не трогает Docker/ufw.
-. /etc/awg-cascade.conf
+# Правила каскада для всех маршрутов из /etc/awg-cascade.d/*.conf.
+# Всё в собственных цепочках AWG_CASCADE_* — не трогает Docker/ufw.
 chain() {  # chain <таблица> <встроенная цепочка> <своя цепочка>
   iptables -t "$1" -N "$3" 2>/dev/null || iptables -t "$1" -F "$3"
   iptables -t "$1" -C "$2" -j "$3" 2>/dev/null || iptables -t "$1" -I "$2" 1 -j "$3"
@@ -101,19 +51,22 @@ unchain() {
 }
 case "$1" in
   up)
+    # Пересборка на месте: уже установленные потоки (conntrack) продолжают работать.
     sysctl -qw net.ipv4.ip_forward=1
     chain nat PREROUTING AWG_CASCADE_PRE
-    iptables -t nat -A AWG_CASCADE_PRE -i "$WAN" -p udp --dport "$LISTEN_PORT" \
-      -j DNAT --to-destination "$EXIT_IP:$EXIT_PORT"
     chain nat POSTROUTING AWG_CASCADE_POST
-    # Ответы выходного сервера должны вернуться через этот сервер.
-    iptables -t nat -A AWG_CASCADE_POST -o "$WAN" -p udp -d "$EXIT_IP" --dport "$EXIT_PORT" -j MASQUERADE
     chain filter FORWARD AWG_CASCADE_FWD
-    iptables -A AWG_CASCADE_FWD -p udp -d "$EXIT_IP" --dport "$EXIT_PORT" -j ACCEPT
-    iptables -A AWG_CASCADE_FWD -p udp -s "$EXIT_IP" --sport "$EXIT_PORT" \
-      -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT
-    # Сбросить старые записи conntrack, чтобы новые правила сразу применились.
-    command -v conntrack >/dev/null && conntrack -D -p udp --dport "$LISTEN_PORT" >/dev/null 2>&1
+    for f in /etc/awg-cascade.d/*.conf; do
+      [ -f "$f" ] || continue
+      ( . "$f"
+        iptables -t nat -A AWG_CASCADE_PRE -i "$WAN" -p udp --dport "$LISTEN_PORT" \
+          -j DNAT --to-destination "$EXIT_IP:$EXIT_PORT"
+        # Ответы выходного сервера должны вернуться через этот сервер.
+        iptables -t nat -A AWG_CASCADE_POST -o "$WAN" -p udp -d "$EXIT_IP" --dport "$EXIT_PORT" -j MASQUERADE
+        iptables -A AWG_CASCADE_FWD -p udp -d "$EXIT_IP" --dport "$EXIT_PORT" -j ACCEPT
+        iptables -A AWG_CASCADE_FWD -p udp -s "$EXIT_IP" --sport "$EXIT_PORT" \
+          -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT )
+    done
     exit 0 ;;
   down)
     unchain nat PREROUTING AWG_CASCADE_PRE
@@ -122,12 +75,13 @@ case "$1" in
   *) echo "usage: $0 up|down"; exit 1 ;;
 esac
 EOF
-chmod 755 $RULES
+  chmod 755 $RULES
+}
 
-echo "net.ipv4.ip_forward = 1" > /etc/sysctl.d/99-awg-cascade.conf
-cat > $UNIT <<EOF
+write_unit() {
+  cat > $UNIT <<EOF
 [Unit]
-Description=Каскад AmneziaWG: пересылка UDP на выходной сервер
+Description=Каскад AmneziaWG: пересылка UDP на выходные серверы
 After=network-online.target docker.service
 Wants=network-online.target
 
@@ -135,22 +89,145 @@ Wants=network-online.target
 Type=oneshot
 RemainAfterExit=yes
 ExecStart=$RULES up
+ExecReload=$RULES up
 ExecStop=$RULES down
 
 [Install]
 WantedBy=multi-user.target
 EOF
-systemctl daemon-reload
-systemctl enable awg-cascade >/dev/null 2>&1
-systemctl restart awg-cascade
+  systemctl daemon-reload
+}
 
-if command -v ufw >/dev/null && ufw status | grep -q active; then
+# Обновление с версии на один маршрут: переносим настройку, ничего не обрывая.
+migrate_legacy() {
+  [[ -f $LEGACY_CONF ]] || return 0
+  install -d -m 755 $CONF_DIR
+  local p; p=$(. $LEGACY_CONF; echo "$LISTEN_PORT")
+  [[ -f $CONF_DIR/$p.conf ]] || cp $LEGACY_CONF "$CONF_DIR/$p.conf"
+  rm -f $LEGACY_CONF
+  log "Прежний маршрут перенесён в $CONF_DIR/$p.conf"
+}
+
+apply_rules() {
+  write_rules_script
+  write_unit
+  systemctl enable awg-cascade >/dev/null 2>&1
+  if systemctl is-active -q awg-cascade; then systemctl reload awg-cascade; else systemctl start awg-cascade; fi
+}
+
+routes() { ls $CONF_DIR/*.conf 2>/dev/null || true; }
+
+migrate_legacy
+
+if [[ $ACTION == status ]]; then
+  if [[ -z "$(routes)" ]]; then echo "Каскад не настроен"; exit 0; fi
+  echo "Маршруты (порт этого сервера → выходной сервер):"
+  for f in $(routes); do
+    ( . "$f"
+      pk=$(iptables -t nat -L AWG_CASCADE_PRE -v -n -x 2>/dev/null | awk -v p="dpt:$LISTEN_PORT" '$0 ~ p" " || $0 ~ p"$" {print $1}' | head -1)
+      echo "  :$LISTEN_PORT/udp → $EXIT_IP:$EXIT_PORT   (новых подключений: ${pk:-0})" )
+  done
+  echo -n "Служба awg-cascade: "; systemctl is-active awg-cascade 2>/dev/null || true
+  exit 0
+fi
+
+if [[ $ACTION == remove ]]; then
+  [[ -n "$RM_PORT" ]] || die "Укажите, какой маршрут удалить: --remove 443 (или --remove all). Список: --status"
+  if [[ "$RM_PORT" == all ]]; then
+    for f in $(routes); do ( . "$f"; ufw_on && ufw delete allow "$LISTEN_PORT/udp" >/dev/null || true ); done
+    systemctl disable --now awg-cascade 2>/dev/null || true
+    [[ -x $RULES ]] && $RULES down || true
+    rm -rf $CONF_DIR; rm -f $UNIT $RULES /etc/sysctl.d/99-awg-cascade.conf
+    systemctl daemon-reload
+    log "Все маршруты каскада удалены"
+    exit 0
+  fi
+  [[ -f $CONF_DIR/$RM_PORT.conf ]] || die "Маршрута на порту $RM_PORT нет. Список: bash entry.sh --status"
+  rm -f "$CONF_DIR/$RM_PORT.conf"
+  ufw_on && ufw delete allow "$RM_PORT/udp" >/dev/null || true
+  FLUSH_PORT=$RM_PORT
+  if [[ -z "$(routes)" ]]; then
+    systemctl disable --now awg-cascade 2>/dev/null || true
+  else
+    apply_rules
+  fi
+  # Уже установленные потоки идут по записям conntrack и без правила — сбрасываем их,
+  # иначе удалённый маршрут продолжит работать для подключённых клиентов.
+  command -v conntrack >/dev/null && conntrack -D -p udp --orig-port-dst "$FLUSH_PORT" >/dev/null 2>&1 || true
+  log "Маршрут :$RM_PORT удалён, остальные работают"
+  exit 0
+fi
+
+# ------------------------------------------------------------------ добавление маршрута
+[[ -n "$EXIT" ]] || die "Укажите выходной сервер: --exit IP:порт"
+EXIT_HOST=${EXIT%:*}; EXIT_PORT=${EXIT##*:}
+[[ "$EXIT_PORT" =~ ^[0-9]+$ && "$EXIT_HOST" != "$EXIT" ]] || die "Формат --exit: IP:порт (например 89.125.27.15:51820)"
+EXIT_IP=$(getent ahostsv4 "$EXIT_HOST" | awk 'NR==1{print $1}')
+[[ -n "$EXIT_IP" ]] || die "Не удалось определить IP для $EXIT_HOST"
+LISTEN_PORT=${PORT:-$EXIT_PORT}
+[[ "$LISTEN_PORT" =~ ^[0-9]+$ ]] || die "Неверный порт: $LISTEN_PORT"
+WAN=$(ip -4 route show default | awk '{for(i=1;i<=NF;i++) if($i=="dev"){print $(i+1); exit}}')
+[[ -n "$WAN" ]] || die "Не найден внешний интерфейс"
+
+UPDATE=0
+if [[ -f $CONF_DIR/$LISTEN_PORT.conf ]]; then
+  OLD=$(. "$CONF_DIR/$LISTEN_PORT.conf"; echo "$EXIT_IP:$EXIT_PORT")
+  if [[ "$OLD" != "$EXIT_IP:$EXIT_PORT" ]]; then
+    die "Порт $LISTEN_PORT уже ведёт на $OLD. Для нового выходного сервера возьмите другой порт,
+   например --port 8443 (список маршрутов: bash entry.sh --status)"
+  fi
+  UPDATE=1                     # тот же маршрут — просто переустановка
+fi
+for f in $(routes); do
+  O=$(. "$f"; echo "$EXIT_IP:$EXIT_PORT:$LISTEN_PORT")
+  if [[ "${O%:*}" == "$EXIT_IP:$EXIT_PORT" && "${O##*:}" != "$LISTEN_PORT" ]]; then
+    log "Замечание: на $EXIT_IP:$EXIT_PORT уже ведёт порт ${O##*:} — добавляю ещё один вход"
+  fi
+done
+
+if [[ $UPDATE == 0 ]]; then
+  if ss -Huln "sport = :$LISTEN_PORT" | grep -q .; then
+    die "UDP-порт $LISTEN_PORT на этом сервере уже занят — выберите другой: --port 8443"
+  fi
+  # Порты уже работающих WireGuard/AmneziaWG на этом сервере — их не перехватываем.
+  for tool in wg awg; do
+    command -v $tool >/dev/null || continue
+    if $tool show all listen-port 2>/dev/null | awk '{print $2}' | grep -qx "$LISTEN_PORT"; then
+      die "UDP-порт $LISTEN_PORT занят туннелем $tool ($($tool show all listen-port | awk -v p=$LISTEN_PORT '$2==p{print $1}')) — выберите другой, например --port 8443"
+    fi
+  done
+  # Порты, опубликованные Docker (Amnezia ставит WireGuard/AWG в контейнеры). Проверяем
+  # правила DNAT Docker — они есть, даже если docker-proxy отключён и ss порт не видит.
+  if iptables -t nat -S DOCKER 2>/dev/null | grep -E -- "-p udp" | grep -qE -- "--dport $LISTEN_PORT( |\$)"; then
+    die "UDP-порт $LISTEN_PORT опубликован Docker-контейнером ($(docker ps --format '{{.Names}} {{.Ports}}' 2>/dev/null | grep -E ":$LISTEN_PORT->" | awk '{print $1}' | tr '\n' ' ')) — выберите другой, например --port 8443"
+  fi
+fi
+if ip -4 -o addr | awk '{sub(/\/.*/,"",$4); print $4}' | grep -qx "$EXIT_IP"; then
+  die "$EXIT_IP — это адрес самого этого сервера. В --exit укажите выходной сервер с AmneziaWG"
+fi
+
+log "Пересылка UDP :$LISTEN_PORT ($WAN) → $EXIT_IP:$EXIT_PORT"
+install -d -m 755 $CONF_DIR
+cat > "$CONF_DIR/$LISTEN_PORT.conf" <<EOF
+EXIT_IP=$EXIT_IP
+EXIT_PORT=$EXIT_PORT
+LISTEN_PORT=$LISTEN_PORT
+WAN=$WAN
+EOF
+echo "net.ipv4.ip_forward = 1" > /etc/sysctl.d/99-awg-cascade.conf
+apply_rules
+# Только для нового порта: сбросить старые записи conntrack, чтобы правило сразу сработало.
+# Записи других маршрутов не трогаем — подключённые клиенты не обрываются.
+command -v conntrack >/dev/null && conntrack -D -p udp --orig-port-dst "$LISTEN_PORT" >/dev/null 2>&1 || true
+
+if ufw_on; then
   ufw allow "$LISTEN_PORT/udp" >/dev/null && log "ufw: открыт $LISTEN_PORT/udp"
 fi
 
 PUB=$(curl -4 -fsS --max-time 5 https://api.ipify.org 2>/dev/null || ip -4 addr show "$WAN" | awk '/inet /{sub(/\/.*/,"",$2); print $2; exit}')
 echo
-log "Готово! Каскад работает и переживёт перезагрузку."
-echo "  В панели: Настройки → «Адрес каскада» = $PUB:$LISTEN_PORT"
+log "Готово! Маршрут :$LISTEN_PORT → $EXIT_IP:$EXIT_PORT работает и переживёт перезагрузку."
+echo "  В панели выходного сервера ($EXIT_IP): Настройки → «Адрес каскада» = $PUB:$LISTEN_PORT"
 echo "  Затем у нужных клиентов выберите маршрут «Через каскад» и обновите у них конфиг."
-echo "  Проверка счётчиков пакетов: sudo bash entry.sh --status"
+echo
+bash "$(realpath "$0")" --status
