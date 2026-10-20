@@ -63,8 +63,15 @@ def params_for(proto):
     return {1: PARAMS_V1, 2: PARAMS_V2}.get(proto, PARAMS_V3)
 
 
+# Таймаут внешних команд: зависший awg не должен навсегда занять блокировку state.json.
+CMD_TIMEOUT = 30
+
+
 def run(cmd, inp=None, check=True):
-    res = subprocess.run(cmd, input=inp, capture_output=True, text=True)
+    try:
+        res = subprocess.run(cmd, input=inp, capture_output=True, text=True, timeout=CMD_TIMEOUT)
+    except subprocess.TimeoutExpired:
+        raise RuntimeError(f"{' '.join(cmd)}: не ответил за {CMD_TIMEOUT} с") from None
     if check and res.returncode != 0:
         raise RuntimeError(f"{' '.join(cmd)}: {res.stderr.strip() or res.stdout.strip()}")
     return res.stdout.strip()
@@ -270,8 +277,11 @@ def write_conf(state):
 
 
 def iface_up(state):
-    return subprocess.run(["awg", "show", state["server"]["iface"]],
-                          capture_output=True).returncode == 0
+    try:
+        return subprocess.run(["awg", "show", state["server"]["iface"]],
+                              capture_output=True, timeout=CMD_TIMEOUT).returncode == 0
+    except subprocess.TimeoutExpired:
+        return False
 
 
 def apply(state, restart=False):
@@ -502,8 +512,11 @@ def active_shares(state):
 
 def status(state):
     """Вернуть {public_key: {...}} из вывода `awg show <iface> dump`."""
-    res = subprocess.run(["awg", "show", state["server"]["iface"], "dump"],
-                         capture_output=True, text=True)
+    try:
+        res = subprocess.run(["awg", "show", state["server"]["iface"], "dump"],
+                             capture_output=True, text=True, timeout=CMD_TIMEOUT)
+    except subprocess.TimeoutExpired:
+        return None
     peers = {}
     if res.returncode != 0:
         return None
