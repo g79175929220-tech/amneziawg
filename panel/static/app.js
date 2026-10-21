@@ -302,6 +302,7 @@ function inGroup(c, g, now) {
     : g === "trial" ? !!c.trial
     : g === "soon" ? !!soon
     : g === "off" ? !c.enabled
+    : g === "stale" ? !!c.stale
     : true;
 }
 
@@ -316,7 +317,9 @@ function renderTabs(list, now) {
   document.querySelectorAll("#tabs button").forEach((b) => {
     const g = b.dataset.tab;
     b.classList.toggle("active", g === tab);
-    b.querySelector("span").textContent = list.filter((c) => inGroup(c, g, now)).length;
+    const n = list.filter((c) => inGroup(c, g, now)).length;
+    b.querySelector("span").textContent = n;
+    if (g === "stale") b.hidden = !n && tab !== "stale";   // вкладка видна, только когда есть кому
   });
   const visible = list.some((c) => { const r = rows.get(c.id); return r && !r.el.hidden; });
   $("#tab-empty").hidden = !list.length || visible;

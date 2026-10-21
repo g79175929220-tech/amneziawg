@@ -123,6 +123,57 @@ def fixup_after_restore(public_ip, wan):
         return msg
 
 
+def read_backup_state(path):
+    with tarfile.open(path, "r:gz") as tar:
+        m = next((m for m in tar.getmembers() if m.isfile() and m.name == "state.json"), None)
+        if not m:
+            raise RuntimeError("В архиве нет state.json — это не копия awg-panel")
+        state = json.load(tar.extractfile(m))
+    if "server" not in state or "clients" not in state:
+        raise RuntimeError("state.json в архиве повреждён")
+    return state
+
+
+def import_clients(path, dry_run=False):
+    """Добавить клиентов из копии другого сервера к клиентам этого (ничего не удаляя).
+
+    Ключи сервера и обфускация у серверов разные, поэтому перенесённым клиентам нужен
+    новый конфиг: они помечаются «старый конфиг». Сроки, лимиты, трафик, заметки и
+    ключи клиентов сохраняются; адрес в подсети меняется, только если занят."""
+    src = read_backup_state(path)
+    src_ep = f"{src['server']['endpoint']}:{src['server']['port']}"
+    report = {"added": [], "skipped": [], "readdressed": []}
+    with awg._lock:
+        state = awg.load()
+        if src["server"].get("public_key") == state["server"].get("public_key"):
+            raise RuntimeError("Это копия этого же сервера — для неё есть restore")
+        keys = {c["public_key"] for c in state["clients"]}
+        ids = {c["id"] for c in state["clients"]}
+        net = ipaddress.ip_network(state["server"]["subnet"])
+        for c in src["clients"]:
+            if c["public_key"] in keys:
+                report["skipped"].append(c["name"])      # уже перенесён раньше
+                continue
+            c = dict(c)
+            while c["id"] in ids:
+                c["id"] = uuid.uuid4().hex[:12]
+            used = {state["server"]["address"].split("/")[0]} | {x["ip"] for x in state["clients"]}
+            if ipaddress.ip_address(c["ip"]) not in net or c["ip"] in used:
+                old_ip, c["ip"] = c["ip"], awg.next_ip(state)
+                report["readdressed"].append(f"{c['name']}: {old_ip} → {c['ip']}")
+            c["last"] = {"rx": 0, "tx": 0}       # счётчики нового пира начинаются с нуля
+            c["issued"] = "import:" + src_ep     # конфиг от другого сервера — всегда «старый»
+            state["clients"].append(c)
+            keys.add(c["public_key"]); ids.add(c["id"])
+            report["added"].append(c["name"])
+        if dry_run or not report["added"]:
+            return report
+        report["backup"] = make_backup()     # копия этого сервера до слияния
+        awg.save(state)
+        awg.apply(state)                      # добавляет пиров, подключённых не трогает
+    return report
+
+
 # ------------------------------------------------------------------ Telegram
 
 def settings(state=None):
@@ -326,6 +377,9 @@ def main():
     sub.add_parser("list", help="список копий")
     r = sub.add_parser("restore", help="восстановить из копии")
     r.add_argument("file")
+    m = sub.add_parser("import", help="добавить клиентов из копии другого сервера (свои остаются)")
+    m.add_argument("file")
+    m.add_argument("--dry-run", action="store_true", help="только показать, что будет сделано")
     f = sub.add_parser("fixup", help="поправить адрес/интерфейс после переноса")
     f.add_argument("--public-ip", default="")
     f.add_argument("--wan", default="")
@@ -338,6 +392,23 @@ def main():
     elif a.cmd == "restore":
         st = restore(a.file)
         print(f"Восстановлено: {len(st['clients'])} клиентов, сервер {server_title(st)}")
+    elif a.cmd == "import":
+        src = read_backup_state(a.file)
+        mine = len(awg.load()["clients"])
+        print(f"Копия сервера {server_title(src)}: {len(src['clients'])} клиентов; здесь сейчас {mine}")
+        r = import_clients(a.file, a.dry_run)
+        for n in r["readdressed"]:
+            print(f"  новый адрес в подсети: {n}")
+        if r["skipped"]:
+            print(f"  уже есть здесь, пропущены: {', '.join(r['skipped'])}")
+        if a.dry_run:
+            print(f"Будет добавлено: {len(r['added'])}. Ничего не изменено (--dry-run).")
+        else:
+            print(f"Добавлено: {len(r['added'])}, клиенты этого сервера не тронуты.")
+            if r.get("backup"):
+                print(f"  Копия до слияния: {r['backup']}")
+            if r["added"]:
+                print("  Перенесённым нужен новый конфиг — в панели они помечены «старый конфиг».")
     elif a.cmd == "fixup":
         for m in fixup_after_restore(a.public_ip, a.wan):
             print(f"  {m}")
