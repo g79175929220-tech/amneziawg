@@ -242,6 +242,24 @@ def client_endpoint(state, c):
     return f"{s['endpoint']}:{s['port']}"
 
 
+def mark_issued(cid):
+    """Запомнить, с каким адресом клиенту выдан конфиг (QR, файл, ссылка): если адрес потом
+    сменится, в списке будет видно, кому конфиг нужно выдать заново."""
+    with _lock:
+        state = load()
+        c = next((c for c in state["clients"] if c["id"] == cid), None)
+        if c and c.get("issued") != client_endpoint(state, c):
+            c["issued"] = client_endpoint(state, c)
+            save(state)
+
+
+def remember_issued(state):
+    """Перед сменой адреса сервера/каскада: клиентам, выданным до появления учёта,
+    записать прежний адрес — у них на устройствах конфиг с ним."""
+    for c in state["clients"]:
+        c.setdefault("issued", client_endpoint(state, c))
+
+
 def client_conf(state, c):
     s = state["server"]
     lines = [
@@ -428,6 +446,8 @@ def update_client(cid, **fields):
             if c["id"] == cid:
                 if fields.pop("reset_usage", False):
                     c["usage"] = {"rx": 0, "tx": 0}
+                if "via" in fields:
+                    c.setdefault("issued", client_endpoint(state, c))
                 c.update(fields)
                 if "enabled" in fields:
                     c["disabled_reason"] = None if c["enabled"] else "manual"

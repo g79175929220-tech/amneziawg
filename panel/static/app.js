@@ -152,7 +152,11 @@ function buildRow(c) {
   const trial = document.createElement("span");
   trial.className = "badge-trial";
   trial.textContent = "ТЕСТ";
-  title.append(name, trial);
+  const stale = document.createElement("span");
+  stale.className = "badge-stale";
+  stale.textContent = "старый конфиг";
+  stale.title = "На устройстве конфиг с прежним адресом сервера: выдайте его заново (QR, файл или ссылка)";
+  title.append(name, trial, stale);
   const note = document.createElement("div");
   note.className = "note";
   const meta = document.createElement("div");
@@ -214,7 +218,7 @@ function buildRow(c) {
   );
 
   li.append(spark, avatar, info, traffic, actions);
-  return { el: li, avatar, avText, dot, name, trial, note, ip, seen, exp, link, quota, barFill, quotaText,
+  return { el: li, avatar, avText, dot, name, trial, stale, note, ip, seen, exp, link, quota, barFill, quotaText,
            tDown, tUp, cb, pDown, pUp,
            prev: null, hist: { down: [], up: [] } };
 }
@@ -226,6 +230,7 @@ function updateRow(row, c, now) {
   row.avText.textContent = initials(c.name);
   if (!row.renaming) row.name.textContent = c.name;
   row.trial.hidden = !c.trial;
+  row.stale.hidden = !c.stale;
   row.note.textContent = c.note || "";
   row.note.hidden = !c.note;
   row.ip.textContent = c.ip;

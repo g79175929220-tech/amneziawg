@@ -114,6 +114,7 @@ def fixup_after_restore(public_ip, wan):
         except ValueError:
             is_ip = False             # домен — клиентам ничего менять не нужно
         if is_ip and public_ip and s["endpoint"] != public_ip:
+            awg.remember_issued(state)
             msg.append(f"адрес сервера {s['endpoint']} → {public_ip}: клиентам нужен новый конфиг "
                        f"(ключи прежние, поменялся только Endpoint)")
             s["endpoint"] = public_ip

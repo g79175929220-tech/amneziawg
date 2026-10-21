@@ -4,6 +4,9 @@
 #   sudo bash cert.sh myvpn.duckdns.org [--email you@mail.ru]   получить и подключить
 #   sudo bash cert.sh --self-signed                              вернуть самоподписанный
 #
+# Домен заодно становится Endpoint в конфигах клиентов: при переезде на другой сервер
+# достаточно перевести домен на новый IP. Оставить прежний Endpoint: --keep-endpoint.
+#
 # Нужно: домен (A-запись) указывает на этот сервер, порт 80/tcp свободен и открыт
 # снаружи — по нему Let's Encrypt проверяет, что домен ваш. Продление автоматическое
 # (certbot.timer), после продления панель перезапускается сама.
@@ -18,11 +21,12 @@ die() { echo -e "\e[1;31m!!\e[0m $*" >&2; exit 1; }
 [[ $EUID -eq 0 ]] || die "Запустите от имени root"
 [[ -d $PANEL_DIR ]] || die "Панель не установлена ($PANEL_DIR нет) — сначала bash install.sh"
 
-DOMAIN=""; EMAIL=""; MODE=le
+DOMAIN=""; EMAIL=""; MODE=le; KEEP_EP=0
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --email) EMAIL="$2"; shift 2 ;;
     --self-signed) MODE=self; shift ;;
+    --keep-endpoint) KEEP_EP=1; shift ;;
     -*) die "Неизвестный параметр: $1" ;;
     *) DOMAIN="${1,,}"; shift ;;
   esac
@@ -114,6 +118,19 @@ chmod 755 "$HOOK"
 systemctl enable --now certbot.timer >/dev/null 2>&1 || true
 
 restart_panel
+
+# 5. Домен — в Endpoint клиентов.
+EP_MSG=""
+if [[ $KEEP_EP == 0 && -f $PANEL_DIR/state.json ]]; then
+  OLD_EP=$(python3 -c 'import json,sys;print(json.load(open(sys.argv[1]))["server"]["endpoint"])' "$PANEL_DIR/state.json")
+  if [[ "$OLD_EP" != "$DOMAIN" ]]; then
+    ( set -a; . "$PANEL_DIR/panel.env"; set +a
+      /opt/awg-panel/venv/bin/python /opt/awg-panel/app.py set-endpoint "$DOMAIN" ) >/dev/null
+    log "Endpoint клиентов: $OLD_EP → $DOMAIN"
+    EP_MSG="  Новые конфиги — с доменом $DOMAIN. Уже выданные (с $OLD_EP) продолжают работать,
+  но при переезде их придётся заменить: в панели они помечены «старый конфиг» — выдайте их заново."
+  fi
+fi
 PORT=$(panel_port)
 if curl -fsS --max-time 10 -o /dev/null "https://$DOMAIN:$PORT/login"; then
   log "Сертификат проверен: браузеры доверяют https://$DOMAIN:$PORT"
@@ -126,3 +143,5 @@ echo "  Панель:   https://$DOMAIN:$PORT"
 echo "  Продление автоматическое, срок: $(openssl x509 -enddate -noout -in "$LIVE/fullchain.pem" | cut -d= -f2)"
 echo "  Одноразовые ссылки будут с доменом, если открывать панель по https://$DOMAIN:$PORT"
 echo "  Вернуть самоподписанный: bash cert.sh --self-signed"
+[[ -n "$EP_MSG" ]] && echo && echo "$EP_MSG"
+exit 0

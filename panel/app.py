@@ -2,6 +2,7 @@
 import argparse
 import hmac
 import io
+import ipaddress
 import json
 import os
 import re
@@ -250,6 +251,8 @@ def api_clients():
             "share_expires": shares.get(c["id"]),
             "via": c.get("via", "direct"),
             "trial": bool(c.get("trial")), "note": c.get("note", ""),
+            # конфиг на устройстве со старым адресом (сменили Endpoint, порт или маршрут)
+            "stale": bool(c.get("issued")) and c["issued"] != awg.client_endpoint(state, c),
         })
     return {"up": live is not None, "now": int(now), "clients": out,
             "cascade": state["server"].get("cascade") or None}
@@ -343,6 +346,7 @@ def share_redeem(token):
         resp = app.make_response((render_template("share.html", c=None, token=token, conf=None), 404))
         return _share_headers(resp)
     state, c = res
+    awg.mark_issued(c["id"])
     conf = awg.client_conf(state, c)
     img = qrcode.make(conf, image_factory=qrcode.image.svg.SvgPathImage, box_size=10, border=2)
     buf = io.BytesIO()
@@ -362,6 +366,7 @@ def api_delete(cid):
 @app.get("/api/clients/<cid>/qr.svg")
 def api_qr(cid):
     state, c = _get_client(cid)
+    awg.mark_issued(cid)
     img = qrcode.make(awg.client_conf(state, c), image_factory=qrcode.image.svg.SvgPathImage,
                       box_size=10, border=2)
     buf = io.BytesIO()
@@ -373,6 +378,7 @@ def api_qr(cid):
 @app.get("/api/clients/<cid>/config")
 def api_config(cid):
     state, c = _get_client(cid)
+    awg.mark_issued(cid)
     return Response(awg.client_conf(state, c), mimetype="text/plain",
                     headers={"Cache-Control": "no-store"})
 
@@ -398,6 +404,7 @@ def download(cid):
     octet-stream, а не text/plain: иначе телефоны сохраняют файл как *.conf.txt."""
     state, c = _get_client(cid)
     ext = "conf" if request.args.get("format") == "conf" else "vpn"
+    awg.mark_issued(cid)
     return Response(awg.client_conf(state, c), mimetype="application/octet-stream",
                     headers={"Content-Disposition": f'attachment; filename="{file_name(c["name"])}.{ext}"',
                              "X-Content-Type-Options": "nosniff", "Cache-Control": "no-store"})
@@ -419,6 +426,7 @@ def _settings():
         action = request.form.get("action")
         try:
             if action == "server":
+                awg.remember_issued(state)
                 s["endpoint"] = request.form["endpoint"].strip()
                 cascade = request.form.get("cascade", "").strip()
                 if cascade and not re.fullmatch(r"[A-Za-z0-9.-]+:\d{1,5}", cascade):
@@ -511,7 +519,15 @@ def _settings():
                    qr=buf.getvalue().decode())
     return render_template("settings.html", s=s, keys=keys, server_conf=awg.server_conf(state),
                            notify=n, token_masked=masked, tfa=tfa, backups=jobs.list_backups(),
-                           backup_dir=jobs.BACKUP_DIR)
+                           backup_dir=jobs.BACKUP_DIR, endpoint_is_ip=_is_ip(s["endpoint"]))
+
+
+def _is_ip(host):
+    try:
+        ipaddress.ip_address(host)
+        return True
+    except ValueError:
+        return False
 
 
 def _settings_2fa(action):
@@ -584,6 +600,8 @@ def cli():
     pw = sub.add_parser("set-password", help="задать логин/пароль панели")
     pw.add_argument("--username", default="admin")
     pw.add_argument("password")
+    se = sub.add_parser("set-endpoint", help="адрес сервера (лучше домен) для конфигов клиентов")
+    se.add_argument("endpoint")
     sub.add_parser("render", help="записать серверный конфиг из state.json")
     sub.add_parser("disable-2fa", help="отключить двухфакторный вход (если потерян телефон и коды)")
     a = p.parse_args()
@@ -609,6 +627,15 @@ def _run_cli(a):
         cfg["username"] = a.username
         cfg["password_hash"] = generate_password_hash(a.password)
         save_panel(cfg)
+    elif a.cmd == "set-endpoint":
+        state = awg.load()
+        if state["server"]["endpoint"] == a.endpoint:
+            print(f"Endpoint уже {a.endpoint}")
+            return
+        awg.remember_issued(state)
+        old, state["server"]["endpoint"] = state["server"]["endpoint"], a.endpoint
+        awg.save(state)
+        print(f"Endpoint: {old} → {a.endpoint}")
     elif a.cmd == "render":
         awg.write_conf(awg.load())
     elif a.cmd == "disable-2fa":
