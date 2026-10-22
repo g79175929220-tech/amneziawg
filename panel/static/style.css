@@ -211,7 +211,7 @@ label.check span { display: flex; align-items: center; gap: 8px; }
 /* ---------- переключатель маршрута */
 .segmented { display: flex; padding: 3px; gap: 3px; background: var(--soft); border-radius: 10px; margin-bottom: 12px; }
 .segmented button { flex: 1; justify-content: center; border: 0; background: transparent; color: var(--muted); padding: 6px 10px; }
-.segmented button.active { background: var(--card); color: var(--fg); box-shadow: var(--shadow); font-weight: 600; }
+.segmented button.active { background: var(--acc); color: var(--acc-fg); box-shadow: var(--shadow); font-weight: 600; }
 
 /* ---------- калькулятор дат */
 .presets { display: flex; flex-wrap: wrap; gap: 6px; margin-top: -6px; }
@@ -279,3 +279,5 @@ details.node { margin-top: 10px; }
 details.node summary { cursor: pointer; padding: 4px 0; }
 pre.copyable { white-space: pre-wrap; word-break: break-all; font-size: 12px; user-select: all; }
 .srv-tag { font-size: 11px; padding: 0 6px; border-radius: 5px; background: rgb(127 127 127 / .14); }
+.qr-node { display: flex; align-items: center; gap: 8px; margin: 0 0 10px; }
+.qr-node select { flex: 1; }

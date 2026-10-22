@@ -93,11 +93,13 @@
 <!-- QR / конфиг -->
 <dialog id="dlg-qr" class="modal wide">
   <h3 id="qr-title"></h3>
+  <label class="qr-node" hidden>Сервер <select id="qr-node"></select></label>
   <div class="segmented" id="qr-route" hidden>
     <button type="button" data-via="direct">Напрямую</button>
     <button type="button" data-via="cascade">Через каскад</button>
   </div>
   <div class="qr-box"><img id="qr-img" alt="QR-код конфигурации"></div>
+  <p class="muted small center" id="qr-endpoint"></p>
   <p class="muted small center">Отсканируйте в приложении AmneziaVPN или AmneziaWG ·
     <a id="qr-download-conf">файл .conf для AmneziaWG</a></p>
   <div class="modal-actions">

@@ -566,7 +566,15 @@ $("#form-create").addEventListener("submit", async (e) => {
 let qrId = null;
 function showRoute(via) {
   const c = clients.find((x) => x.id === qrId);
-  $("#qr-route").hidden = !(c && srvOf(c).cascade);
+  const srv = c ? srvOf(c) : {};
+  $("#qr-route").hidden = !srv.cascade;
+  // Куда подключится этот конфиг — сервер и адрес.
+  const qn = $("#qr-node");
+  qn.replaceChildren(...servers.map((s) => new Option(`${s.name} (${s.endpoint})`, s.id)));
+  qn.value = srv.id || "";
+  qn.closest("label").hidden = servers.length < 2;
+  $("#qr-endpoint").textContent = srv.endpoint ? `Подключение: ${servers.length > 1 ? srv.name + " · " : ""}` +
+    (via === "cascade" && srv.cascade ? `через каскад ${srv.cascade}` : `напрямую ${srv.endpoint}`) : "";
   $("#qr-route").querySelectorAll("button").forEach((b) =>
     b.classList.toggle("active", b.dataset.via === via));
 }
@@ -580,6 +588,16 @@ $("#qr-route").addEventListener("click", async (e) => {
     toast(via === "cascade" ? "Маршрут: через каскад. Обновите конфиг на устройстве"
                             : "Маршрут: напрямую. Обновите конфиг на устройстве");
     refresh();
+  } catch (err) { toast(err.message, true); }
+});
+$("#qr-node").addEventListener("change", async (e) => {
+  try {
+    await api("PATCH", `/api/clients/${qrId}`, { node: e.target.value });
+    await refresh();
+    const c = clients.find((x) => x.id === qrId);
+    showRoute(c && c.via === "cascade" ? "cascade" : "direct");
+    $("#qr-img").src = `/api/clients/${qrId}/qr.svg?t=${Date.now()}`;
+    toast(`Клиент перенесён на «${srvOf(c).name}». Импортируйте этот конфиг на устройстве`);
   } catch (err) { toast(err.message, true); }
 });
 function openQR(id) {
