@@ -253,6 +253,7 @@ def api_clients():
             "via": c.get("via", "direct"),
             "node": awg.node_id(c),
             "trial": bool(c.get("trial")), "note": c.get("note", ""),
+            "config_name": c.get("config_name") or "", "file_name": file_name(config_name(c)),
             # конфиг на устройстве со старым адресом (сменили Endpoint, порт или маршрут)
             "stale": bool(c.get("issued")) and c["issued"] != awg.client_endpoint(state, c),
         })
@@ -328,6 +329,8 @@ def api_update(cid):
         fields["trial"] = bool(data["trial"])
     if "note" in data:
         fields["note"] = str(data["note"]).strip()[:200]
+    if "config_name" in data:
+        fields["config_name"] = str(data["config_name"]).strip()[:40] or None
     if "node" in data:
         fields["node"] = _parse_node(awg.load(), data["node"])
     try:
@@ -380,7 +383,7 @@ def share_redeem(token):
     img = qrcode.make(conf, image_factory=qrcode.image.svg.SvgPathImage, box_size=10, border=2)
     buf = io.BytesIO()
     img.save(buf)
-    fname = file_name(c["name"])
+    fname = file_name(config_name(c))
     return _share_headers(app.make_response(render_template(
         "share.html", c=c, token=token, conf=conf, qr=buf.getvalue().decode(), fname=fname)))
 
@@ -417,13 +420,21 @@ _TR = dict(zip("абвгдеёжзийклмнопрстуфхцчшщъыьэю
                 "r", "s", "t", "u", "f", "h", "ts", "ch", "sh", "sch", "", "y", "", "e", "yu", "ya"]))
 
 
-def file_name(name):
-    """Имя файла латиницей: браузеры и мессенджеры теряют кириллицу в именах загрузок."""
+def file_name(name, short=False):
+    """Имя файла латиницей: браузеры и мессенджеры теряют кириллицу в именах загрузок.
+    short — для .conf: приложения WireGuard/AmneziaWG берут имя туннеля из имени файла
+    и принимают не длиннее 15 символов."""
     out = []
     for ch in name:
         t = _TR.get(ch.lower())
         out.append(ch if t is None else (t.capitalize() if ch.isupper() else t))
-    return re.sub(r"[^A-Za-z0-9_-]+", "_", "".join(out)).strip("_") or "client"
+    res = re.sub(r"[^A-Za-z0-9_-]+", "_", "".join(out)).strip("_") or "client"
+    return res[:15].rstrip("_-") or "client" if short else res
+
+
+def config_name(c):
+    """Название конфига: своё, если задано, иначе имя клиента."""
+    return c.get("config_name") or c["name"]
 
 
 @app.get("/clients/<cid>/download")
@@ -435,7 +446,8 @@ def download(cid):
     ext = "conf" if request.args.get("format") == "conf" else "vpn"
     awg.mark_issued(cid)
     return Response(awg.client_conf(state, c), mimetype="application/octet-stream",
-                    headers={"Content-Disposition": f'attachment; filename="{file_name(c["name"])}.{ext}"',
+                    headers={"Content-Disposition":
+                             f'attachment; filename="{file_name(config_name(c), short=ext == "conf")}.{ext}"',
                              "X-Content-Type-Options": "nosniff", "Cache-Control": "no-store"})
 
 

@@ -615,6 +615,12 @@ $("#qr-copy").addEventListener("click", async () => {
   catch (e) { toast(e.message, true); }
 });
 
+function updateFname(f) {
+  const n = translit(f.config_name.value.trim() || f.config_name.placeholder);
+  $("#limits-fname").textContent = `Файл: ${n}.vpn · для AmneziaWG: ${n.slice(0, 15).replace(/[_-]+$/, "")}.conf`;
+}
+$("#form-limits").config_name.addEventListener("input", (e) => updateFname(e.target.form));
+
 let limId = null;
 function openLimits(id) {
   const c = clients.find((x) => x.id === id);
@@ -628,6 +634,9 @@ function openLimits(id) {
   f.limit_gb.value = c.limit_bytes ? +(c.limit_bytes / 1024 ** 3).toFixed(2) : "";
   f.limit_period.value = c.limit_bytes ? c.limit_period : "month";
   f.note.value = c.note || "";
+  f.config_name.value = c.config_name || "";
+  f.config_name.placeholder = c.name;
+  updateFname(f);
   f.trial.checked = !!c.trial;
   f.node.value = c.node;
   f.dataset.node = c.node;
@@ -642,7 +651,7 @@ $("#form-limits").addEventListener("submit", async (e) => {
     await api("PATCH", `/api/clients/${limId}`, {
       expires: f.expires.value, limit_gb: f.limit_gb.value,
       limit_period: f.limit_period.value, reset_usage: f.reset_usage.checked,
-      trial: f.trial.checked, note: f.note.value,
+      trial: f.trial.checked, note: f.note.value, config_name: f.config_name.value,
       ...(f.node.value && f.node.value !== f.dataset.node ? { node: f.node.value } : {}),
     });
     $("#dlg-limits").close();
