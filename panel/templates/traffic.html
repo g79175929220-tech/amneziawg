@@ -1,0 +1,89 @@
+{% extends "base.html" %}
+{% block body %}
+<div class="card">
+  <h2>Трафик серверов · {{ r.title }}</h2>
+  <p class="muted small">«Сервер» — весь трафик сетевой карты (так считает хостинг: VPN 3.1, AmneziaWG 2.0,
+     обновления — всё вместе). «Клиенты VPN» — трафик клиентов панели; через сервер он проходит дважды
+     (из интернета на сервер и с сервера клиенту), поэтому сервер обычно показывает примерно вдвое больше.
+     Единицы десятичные, как у хостингов: 1 ТБ = 1000 ГБ.</p>
+  <div class="srvq-grid">
+    {% for sv in r.servers %}
+    <div class="srvq {% if sv.pct is not none and sv.pct >= 100 %}over{% elif sv.pct is not none and sv.pct >= 80 %}warn{% endif %}">
+      <div class="srvq-head"><b>{{ sv.name }}</b> <span class="muted small">{{ sv.endpoint }}</span></div>
+      {% if sv.has_if %}
+      <div class="srvq-big">{{ sv.used | dbytes }}{% if sv.quota %} <span class="muted">из {{ sv.quota | dbytes }}</span>{% endif %}</div>
+      {% if sv.quota %}
+      <div class="bar big"><i style="width: {{ [sv.pct, 100] | min }}%"></i></div>
+      <div class="small">{{ '%.0f' | format(sv.pct) }}% лимита ({{ modes[sv.mode] }})
+        {% if sv.forecast %} · прогноз на конец месяца: <b class="{% if sv.forecast > sv.quota %}err{% endif %}">{{ sv.forecast | dbytes }}</b>{% endif %}</div>
+      {% endif %}
+      <div class="muted small">↓ входящий {{ sv.cell.get('if_rx', 0) | dbytes }} · ↑ исходящий {{ sv.cell.get('if_tx', 0) | dbytes }}
+        · клиенты VPN {{ (sv.cell.get('rx', 0) + sv.cell.get('tx', 0)) | dbytes }}</div>
+      {% if sv.partial %}<div class="muted small">⚠ Учёт начат {{ sv.since | ago }} — трафик до этого момента в этом месяце не виден
+        (точная цифра — в панели хостинга).</div>{% endif %}
+      {% else %}
+      <div class="muted small">Счётчик сервера ещё не получен.
+        {% if sv.id != 'local' %}Обновите агент на этом сервере: <code>cd ~/amneziawg &amp;&amp; git pull &amp;&amp; bash install.sh --node "…ключ…"</code>
+        (команда — в Настройки → Серверы).{% endif %}</div>
+      <div class="muted small">Клиенты VPN: {{ (sv.cell.get('rx', 0) + sv.cell.get('tx', 0)) | dbytes }}</div>
+      {% endif %}
+      <details class="srvq-set">
+        <summary class="small">Лимит хостинга</summary>
+        <form method="post" class="form-grid">
+          <input type="hidden" name="csrf" value="{{ csrf_token() }}">
+          <input type="hidden" name="id" value="{{ sv.id }}">
+          <label>ТБ в месяц (0 — без лимита) <input name="quota_tb" type="number" min="0" step="any" value="{{ sv.quota_tb }}"></label>
+          <label>Хостинг считает <select name="quota_mode">
+            {% for k, v in modes.items() %}<option value="{{ k }}" {% if k == sv.mode %}selected{% endif %}>{{ v }}</option>{% endfor %}
+          </select></label>
+          <div><button>Сохранить</button></div>
+        </form>
+      </details>
+    </div>
+    {% endfor %}
+  </div>
+  <p class="muted small">При 80% и 100% лимита придёт уведомление в Telegram (если оно настроено).</p>
+</div>
+
+<div class="card">
+  <h2>По месяцам</h2>
+  <div class="table-wrap">
+  <table class="traffic-table">
+    <thead><tr><th>Месяц</th>{% for n in r.names %}<th>{{ n }}<br><span class="muted small">сервер · клиенты</span></th>{% endfor %}
+      {% if r.names|length > 1 %}<th>Итого<br><span class="muted small">сервер · клиенты</span></th>{% endif %}</tr></thead>
+    <tbody>
+    {% for m in r.months %}
+    <tr {% if m.period == sel %}class="sel"{% endif %}>
+      <td><a href="?m={{ m.period }}">{{ m.title }}</a></td>
+      {% for c in m.cells %}
+      {% set q = r.servers[loop.index0].quota %}
+      <td><b class="{% if q and c.used > q %}err{% endif %}">{{ c['if'] | dbytes }}</b> · {{ c.vpn | dbytes }}</td>
+      {% endfor %}
+      {% if r.names|length > 1 %}<td><b>{{ m.if_total | dbytes }}</b> · {{ m.vpn_total | dbytes }}</td>{% endif %}
+    </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+  </div>
+</div>
+
+<div class="card">
+  <h2>Клиенты · {{ sel_title }}</h2>
+  {% if clients %}
+  <div class="table-wrap">
+  <table class="traffic-table">
+    <thead><tr><th>Клиент</th>{% if r.names|length > 1 %}<th>Сервер</th>{% endif %}<th>Скачал ↓</th><th>Отправил ↑</th><th>Всего</th></tr></thead>
+    <tbody>
+    {% for c in clients %}
+    <tr><td>{{ c.name }}{% if c.note %} <span class="muted small">{{ c.note }}</span>{% endif %}</td>
+      {% if r.names|length > 1 %}<td class="muted">{{ c.server }}</td>{% endif %}
+      <td>{{ c.tx | dbytes }}</td><td>{{ c.rx | dbytes }}</td><td><b>{{ c.total | dbytes }}</b></td></tr>
+    {% endfor %}
+    </tbody>
+  </table>
+  </div>
+  {% else %}
+  <p class="muted">За этот месяц данных нет (учёт по месяцам ведётся с момента обновления панели).</p>
+  {% endif %}
+</div>
+{% endblock %}

@@ -33,6 +33,8 @@ _cache = {}             # node_id -> (время, peers | None, ошибка)
 _pushed = {}            # node_id -> хеш последнего отправленного конфига
 _errors = {}            # node_id -> текст последней ошибки
 _failed = {}            # node_id -> время последней неудачи (monotonic)
+_ifstat = {}            # node_id -> (rx, tx, время) счётчики сетевой карты сервера
+_fetched = {}           # node_id -> когда прочитаны счётчики клиентов (time.time)
 _locks = {}
 _glock = threading.Lock()
 
@@ -153,7 +155,14 @@ def dump(node, max_age=DUMP_TTL):
         if fresh(_cache.get(node["id"])):
             return _cache[node["id"]][1]
         try:
-            peers = awg.parse_dump(call(node, "dump", timeout=10))
+            out = call(node, "dump", timeout=10)
+            peers = awg.parse_dump(out)
+            _fetched[node["id"]] = time.time()
+            # Агент дописывает строку «#if <rx> <tx>» — счётчики сетевой карты (старый — нет).
+            for line in out.splitlines():
+                f = line.split()
+                if len(f) == 3 and f[0] == "#if" and f[1].isdigit() and f[2].isdigit():
+                    _ifstat[node["id"]] = (int(f[1]), int(f[2]), _fetched[node["id"]])
             _errors.pop(node["id"], None)
             _failed.pop(node["id"], None)
         except Exception as e:  # noqa: BLE001
@@ -165,6 +174,14 @@ def dump(node, max_age=DUMP_TTL):
         return peers
 
 
+def fetched_at(nid):
+    return _fetched.get(nid, 0)
+
+
+def ifstat(nid):
+    return _ifstat.get(nid)
+
+
 def pushed(nid):
     return nid in _pushed
 
@@ -174,7 +191,7 @@ def error(nid):
 
 
 def forget(nid):
-    for d in (_cache, _pushed, _errors, _failed):
+    for d in (_cache, _pushed, _errors, _failed, _ifstat, _fetched):
         d.pop(nid, None)
 
 

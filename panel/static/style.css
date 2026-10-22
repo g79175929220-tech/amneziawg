@@ -281,3 +281,20 @@ pre.copyable { white-space: pre-wrap; word-break: break-all; font-size: 12px; us
 .srv-tag { font-size: 11px; padding: 0 6px; border-radius: 5px; background: rgb(127 127 127 / .14); }
 .qr-node { display: flex; align-items: center; gap: 8px; margin: 0 0 10px; }
 .qr-node select { flex: 1; }
+
+.srvq-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 12px; margin: 12px 0; }
+.srvq { border: 1px solid var(--line); border-radius: 12px; padding: 12px 14px; display: grid; gap: 6px; }
+.srvq.warn { border-color: var(--warn); }
+.srvq.over { border-color: var(--err); }
+.srvq-big { font-size: 22px; font-weight: 700; }
+.srvq-big .muted { font-size: 14px; font-weight: 400; }
+.bar.big { display: block; height: 8px; border-radius: 4px; background: var(--soft); overflow: hidden; }
+.bar.big i { display: block; height: 100%; background: var(--acc); }
+.srvq.warn .bar.big i { background: var(--warn); }
+.srvq.over .bar.big i { background: var(--err); }
+.err { color: var(--err); }
+.table-wrap { overflow-x: auto; }
+table.traffic-table { width: 100%; border-collapse: collapse; font-size: 14px; }
+table.traffic-table th, table.traffic-table td { text-align: left; padding: 6px 8px; border-top: 1px solid var(--line); white-space: nowrap; }
+table.traffic-table th { font-weight: 600; vertical-align: bottom; }
+table.traffic-table tr.sel td { background: var(--acc-soft); }

@@ -31,6 +31,8 @@ PY
     ;;
   dump)
     awg show "$IFACE" dump
+    # Весь трафик сетевой карты — его считает хостинг (для учёта по месяцам в панели).
+    echo "#if $(cat /sys/class/net/$WAN/statistics/rx_bytes) $(cat /sys/class/net/$WAN/statistics/tx_bytes)"
     ;;
   apply)
     tmp=$(mktemp /etc/awg3/.incoming.XXXXXX)

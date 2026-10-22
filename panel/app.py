@@ -68,7 +68,17 @@ def ago(ts):
     return f"{d // 86400} д назад"
 
 
-app.jinja_env.filters.update(bytes=human_bytes, ago=ago)
+def dec_bytes(n):
+    """Десятичные единицы, как у хостингов: 1 ТБ = 10^12 байт."""
+    n = n or 0
+    for unit in ["Б", "КБ", "МБ", "ГБ", "ТБ"]:
+        if n < 1000:
+            return f"{n:.0f} {unit}" if unit == "Б" else f"{n:.1f} {unit}"
+        n /= 1000
+    return f"{n:.1f} ПБ"
+
+
+app.jinja_env.filters.update(bytes=human_bytes, ago=ago, dbytes=dec_bytes)
 
 
 def csrf_token():
@@ -449,6 +459,101 @@ def download(cid):
                     headers={"Content-Disposition":
                              f'attachment; filename="{file_name(config_name(c), short=ext == "conf")}.{ext}"',
                              "X-Content-Type-Options": "nosniff", "Cache-Control": "no-store"})
+
+
+MONTHS = ["", "январь", "февраль", "март", "апрель", "май", "июнь", "июль", "август",
+          "сентябрь", "октябрь", "ноябрь", "декабрь"]
+QUOTA_MODES = {"total": "входящий + исходящий", "out": "только исходящий", "in": "только входящий"}
+
+
+def month_title(period):
+    y, m = period.split("-")
+    return f"{MONTHS[int(m)]} {y}"
+
+
+def quota_used(cell, mode):
+    if mode == "out":
+        return cell.get("if_tx", 0)
+    if mode == "in":
+        return cell.get("if_rx", 0)
+    return cell.get("if_rx", 0) + cell.get("if_tx", 0)
+
+
+def traffic_report(state):
+    """Сводка трафика: по серверам за текущий месяц (с прогнозом), по месяцам, по клиентам."""
+    period = awg._period()
+    tr = state.get("traffic", {})
+    srvs = [(awg.LOCAL, state["server"])] + [(n["id"], n) for n in state.get("nodes", [])]
+    lt = time.localtime()
+    days_in = (time.mktime((lt.tm_year + lt.tm_mon // 12, lt.tm_mon % 12 + 1, 1, 0, 0, 0, 0, 0, -1))
+               - time.mktime((lt.tm_year, lt.tm_mon, 1, 0, 0, 0, 0, 0, -1)))
+    elapsed = time.time() - time.mktime((lt.tm_year, lt.tm_mon, 1, 0, 0, 0, 0, 0, -1))
+    since = state.get("traffic_since", {})
+    cur = []
+    for nid, srv in srvs:
+        cell = tr.get(period, {}).get(nid, {})
+        mode = srv.get("quota_mode", "total")
+        quota = int(float(srv.get("quota_tb", 1)) * 10**12)
+        used = quota_used(cell, mode)
+        # Прогноз до конца месяца — по средней скорости с начала учёта в этом месяце.
+        start = max(since.get(nid, 0), time.time() - elapsed)
+        span = max(time.time() - start, 1)
+        forecast = used + used / span * max(days_in - elapsed, 0) if span > 3600 else None
+        cur.append({
+            "id": nid, "name": awg.server_name(state, nid), "endpoint": f"{srv['endpoint']}:{srv['port']}",
+            "cell": cell, "mode": mode, "quota": quota, "quota_tb": srv.get("quota_tb", 1), "used": used,
+            "pct": used / quota * 100 if quota else None, "forecast": forecast,
+            "since": since.get(nid), "partial": since.get(nid, 0) > time.time() - elapsed,
+            "has_if": nid in state.get("ifstat", {}),
+        })
+    months = []
+    for m in sorted(set(tr) | {period}, reverse=True):
+        row = {"period": m, "title": month_title(m), "cells": [], "if_total": 0, "vpn_total": 0}
+        for nid, srv in srvs:
+            cell = tr.get(m, {}).get(nid, {})
+            iff = cell.get("if_rx", 0) + cell.get("if_tx", 0)
+            vpn = cell.get("rx", 0) + cell.get("tx", 0)
+            row["cells"].append({"if": iff, "vpn": vpn, "used": quota_used(cell, srv.get("quota_mode", "total"))})
+            row["if_total"] += iff
+            row["vpn_total"] += vpn
+        months.append(row)
+    return {"period": period, "title": month_title(period), "servers": cur, "months": months,
+            "names": [awg.server_name(state, nid) for nid, _ in srvs]}
+
+
+@app.route("/traffic", methods=["GET", "POST"])
+def traffic():
+    if request.method == "POST":
+        with awg._lock:
+            state = awg.load()
+            try:
+                srv = awg.server_by_id(state, request.form["id"])
+                q = float(request.form.get("quota_tb", "0").replace(",", ".") or 0)
+                if q < 0 or q > 1000:
+                    raise ValueError("Лимит — от 0 до 1000 ТБ")
+                mode = request.form.get("quota_mode", "total")
+                if mode not in QUOTA_MODES:
+                    raise ValueError("Неизвестный способ подсчёта")
+                srv["quota_tb"], srv["quota_mode"] = q, mode
+                awg.save(state)
+                flash("Лимит сохранён", "ok")
+            except (KeyError, ValueError) as e:
+                flash(str(e), "err")
+        return redirect(url_for("traffic"))
+    state = awg.load()
+    rep = traffic_report(state)
+    sel = request.args.get("m") or rep["period"]
+    if not re.fullmatch(r"\d{4}-\d{2}", sel):
+        sel = rep["period"]
+    clients = []
+    for c in state["clients"]:
+        rx, tx = c.get("monthly", {}).get(sel, [0, 0])
+        if rx or tx:
+            clients.append({"name": c["name"], "server": awg.server_name(state, awg.node_id(c)),
+                            "rx": rx, "tx": tx, "total": rx + tx, "note": c.get("note", "")})
+    clients.sort(key=lambda x: -x["total"])
+    return render_template("traffic.html", r=rep, sel=sel, sel_title=month_title(sel), clients=clients,
+                           modes=QUOTA_MODES)
 
 
 @app.route("/settings", methods=["GET", "POST"])

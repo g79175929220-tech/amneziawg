@@ -297,6 +297,10 @@ def digest_text(state):
             lines.append(f"• {_h(c['name'])}: {why}{note}")
     if not soon and not gone:
         lines.append("\nВсё спокойно: никто не истекает и никто не отключался.")
+    tq = _quota_lines(state)
+    if tq:
+        lines.append("\n📊 <b>Трафик серверов за месяц:</b>")
+        lines += tq
     return "\n".join(lines)
 
 
@@ -340,6 +344,9 @@ def tick(events, down=(), log=print):
                 t["down"] = False
                 _safe(lambda: send(f"🟢 Сервер снова работает: {_h(title)}", cfg), log)
 
+    if tg_on and cfg["alerts"]:
+        _quota_alerts(state, cfg, log)
+
     now = _now_local(cfg)
     today = now.strftime("%Y-%m-%d")
     jobs = state.get("jobs", {})
@@ -358,6 +365,56 @@ def send_backup(path, cfg, state):
         tg(cfg["token"], "sendDocument",
            {"chat_id": cfg["chat_id"], "caption": f"💾 Резервная копия · {server_title(state)}"},
            files={"document": (os.path.basename(path), f.read())}, timeout=60)
+
+
+QUOTA_LEVELS = (80, 100)
+
+
+def _quota_used(state, nid, srv, period):
+    cell = state.get("traffic", {}).get(period, {}).get(nid, {})
+    mode = srv.get("quota_mode", "total")
+    return {"out": cell.get("if_tx", 0), "in": cell.get("if_rx", 0)}.get(
+        mode, cell.get("if_rx", 0) + cell.get("if_tx", 0))
+
+
+def _quota_lines(state):
+    period = awg._period()
+    out = []
+    for nid, srv in [(awg.LOCAL, state["server"])] + [(n["id"], n) for n in state.get("nodes", [])]:
+        if nid not in state.get("ifstat", {}):
+            continue
+        used = _quota_used(state, nid, srv, period)
+        q = float(srv.get("quota_tb", 1)) * 10**12
+        pct = f" из {q / 10**12:g} ТБ ({used / q * 100:.0f}%)" if q else ""
+        out.append(f"• {_h(awg.server_name(state, nid))}: {used / 10**12:.2f} ТБ{pct}")
+    return out
+
+
+def _quota_alerts(state, cfg, log):
+    """Трафик сервера за месяц дошёл до 80% / 100% лимита хостинга — один раз на уровень."""
+    period = awg._period()
+    srvs = [(awg.LOCAL, state["server"])] + [(n["id"], n) for n in state.get("nodes", [])]
+    for nid, srv in srvs:
+        q = float(srv.get("quota_tb", 1)) * 10**12
+        if not q:
+            continue
+        used = _quota_used(state, nid, srv, period)
+        for lvl in QUOTA_LEVELS:
+            key = f"quota:{nid}:{period}:{lvl}"
+            if used >= q * lvl / 100 and not state.get("jobs", {}).get(key):
+                _mark(state, key, period)
+                icon = "🔴" if lvl >= 100 else "🟠"
+                _safe(lambda: send(f"{icon} <b>Трафик сервера: {used / 10**12:.2f} ТБ из {q / 10**12:g} ТБ</b> ({lvl}%)\n"
+                                   f"{_h(awg.server_name(state, nid))} · {_h(srv['endpoint'])}\n"
+                                   f"За {period}. Подробно — страница «Трафик» в панели.", cfg), log)
+    # старые отметки (прошлые месяцы) не копим
+    old = [k for k in state.get("jobs", {}) if k.startswith("quota:") and k.split(":")[2] != period]
+    if old:
+        with awg._lock:
+            st = awg.load()
+            for k in old:
+                st.get("jobs", {}).pop(k, None)
+            awg.save(st)
 
 
 def _node_error(nid):

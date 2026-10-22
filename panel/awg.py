@@ -441,19 +441,28 @@ def _account(state, live, events=None):
     period = _period()
     changed = False
     down = getattr(live, "down", ())
+    ts = getattr(live, "ts", {})
     for c in state["clients"]:
         u = c.setdefault("usage", {"rx": 0, "tx": 0})
+        nid = node_id(c)
         # Сервер клиента недоступен — счётчики неизвестны, last не сбрасываем,
         # иначе после восстановления связи трафик посчитался бы второй раз.
-        if live is not None and node_id(c) not in down:
+        # Данные старее уже учтённых (их прочитали до другого обновления) — тоже пропускаем:
+        # меньшее значение счётчика иначе выглядело бы как его сброс.
+        if live is not None and nid not in down and ts.get(nid, 0) >= c.get("last_ts", 0):
             st = live.get(c["public_key"])
             last = c.get("last", {"rx": 0, "tx": 0})
             if st:
-                u["rx"] += _delta(st["rx"], last["rx"])
-                u["tx"] += _delta(st["tx"], last["tx"])
+                drx, dtx = _delta(st["rx"], last["rx"]), _delta(st["tx"], last["tx"])
+                u["rx"] += drx
+                u["tx"] += dtx
                 c["last"] = {"rx": st["rx"], "tx": st["tx"]}
+                if drx or dtx:
+                    add_traffic(state, c, period, drx, dtx)
             else:
                 c["last"] = {"rx": 0, "tx": 0}
+            if nid in ts:
+                c["last_ts"] = ts[nid]
         # Месячный лимит: в новом месяце счётчик обнуляется.
         if c.get("limit_period") == "month" and c.get("period") != period:
             if c.get("period"):
@@ -475,6 +484,63 @@ def _account(state, live, events=None):
     return changed
 
 
+# ------------------------------------------------------------ трафик по месяцам
+# state["traffic"]["2026-10"][сервер] = {"rx", "tx"} — клиенты VPN (rx — от клиентов,
+# tx — к клиентам), "if_rx"/"if_tx" — весь трафик сетевой карты сервера (его считает хостинг).
+# У клиента — c["monthly"]["2026-10"] = [rx, tx]. Хранится 24 месяца.
+KEEP_MONTHS = 24
+
+
+def add_traffic(state, c, period, drx, dtx):
+    m = c.setdefault("monthly", {})
+    cur = m.setdefault(period, [0, 0])
+    cur[0] += drx
+    cur[1] += dtx
+    for k in sorted(m)[:-KEEP_MONTHS]:
+        del m[k]
+    t = _traffic_cell(state, period, node_id(c))
+    t["rx"] += drx
+    t["tx"] += dtx
+
+
+def _traffic_cell(state, period, nid):
+    tr = state.setdefault("traffic", {})
+    for k in sorted(tr)[:-KEEP_MONTHS]:
+        del tr[k]
+    cell = tr.setdefault(period, {}).setdefault(nid, {})
+    for k in ("rx", "tx", "if_rx", "if_tx"):
+        cell.setdefault(k, 0)
+    return cell
+
+
+def _account_if(state, live):
+    """Прирост счётчиков сетевой карты серверов (весь трафик: VPN 3.1, 2.0, обновления…)."""
+    period = _period()
+    last_all = state.setdefault("ifstat", {})
+    for nid, (rx, tx, t) in getattr(live, "ifstat", {}).items():
+        last = last_all.get(nid)
+        if last and t <= last["ts"]:
+            continue
+        if last:
+            cell = _traffic_cell(state, period, nid)
+            cell["if_rx"] += _delta(rx, last["rx"])
+            cell["if_tx"] += _delta(tx, last["tx"])
+        else:
+            state.setdefault("traffic_since", {})[nid] = int(t)   # учёт начат с этого момента
+        last_all[nid] = {"rx": rx, "tx": tx, "ts": t}
+
+
+def wan_counters(wan):
+    try:
+        with open(f"/sys/class/net/{wan}/statistics/rx_bytes") as f:
+            rx = int(f.read())
+        with open(f"/sys/class/net/{wan}/statistics/tx_bytes") as f:
+            tx = int(f.read())
+        return rx, tx
+    except (OSError, ValueError):
+        return None
+
+
 def check():
     """Периодическая проверка: учёт трафика, сроки, лимиты.
     Возвращает (события автоотключения, серверы без ответа)."""
@@ -484,6 +550,7 @@ def check():
         state = load()
         events = []
         changed = _account(state, live, events)
+        _account_if(state, live)
         save(state)
         if changed:
             apply(state)
@@ -599,23 +666,33 @@ def active_shares(state):
 
 
 class Live(dict):
-    """{public_key: {...}} по всем серверам; down — серверы, о которых данных нет."""
+    """{public_key: {...}} по всем серверам; down — серверы, о которых данных нет;
+    ts — когда прочитаны данные каждого сервера; ifstat — {сервер: (rx, tx, ts)}
+    счётчики его сетевой карты."""
     down = frozenset()
+    ts = {}
+    ifstat = {}
 
 
 def status(state, max_age=None):
     """Пиры всех серверов из `awg show <iface> dump`."""
     live = Live()
     down = set()
+    live.ts, live.ifstat = {}, {}
+    now = time.time()
     try:
         res = subprocess.run(["awg", "show", state["server"]["iface"], "dump"],
                              capture_output=True, text=True, timeout=CMD_TIMEOUT)
         if res.returncode == 0:
             live.update(parse_dump(res.stdout))
+            live.ts[LOCAL] = now
         else:
             down.add(LOCAL)
     except subprocess.TimeoutExpired:
         down.add(LOCAL)
+    w = wan_counters(state["server"]["wan"])
+    if w:
+        live.ifstat[LOCAL] = (*w, now)
     if state.get("nodes"):
         import nodes
         for n in state["nodes"]:
@@ -624,6 +701,10 @@ def status(state, max_age=None):
                 down.add(n["id"])
             else:
                 live.update(peers)
+                live.ts[n["id"]] = nodes.fetched_at(n["id"])
+                ifs = nodes.ifstat(n["id"])
+                if ifs:
+                    live.ifstat[n["id"]] = ifs
     live.down = frozenset(down)
     return live
 
@@ -631,6 +712,8 @@ def status(state, max_age=None):
 def parse_dump(out):
     peers = {}
     for line in out.strip().splitlines()[1:]:
+        if line.startswith("#"):
+            continue
         f = line.split("\t")
         if len(f) < 8:
             continue
