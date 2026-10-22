@@ -92,6 +92,13 @@ cd amneziawg && sudo bash install.sh --restore /root/awg-backup-20261013-030000.
 `install.sh --restore` заменяет всё целиком. Чтобы **добавить** клиентов другого сервера к своим:
 
 ```bash
+cd ~/amneziawg && git pull && sudo bash migrate-from.sh 89.125.27.15   # или путь к файлу копии
+```
+
+Скрипт заберёт свежую копию со старого сервера по SSH, покажет, что будет сделано, и после
+подтверждения добавит клиентов. То же вручную:
+
+```bash
 set -a; . /etc/awg-panel/panel.env; set +a
 /opt/awg-panel/venv/bin/python /opt/awg-panel/jobs.py import /root/awg-backup-....tar.gz --dry-run   # посмотреть
 /opt/awg-panel/venv/bin/python /opt/awg-panel/jobs.py import /root/awg-backup-....tar.gz
