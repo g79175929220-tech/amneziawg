@@ -154,7 +154,12 @@ UNIT
 systemctl daemon-reload
 
 # ---------------------------------------------------- соседство с другими туннелями
-udp_busy() { ss -Huln "sport = :$1" | grep -q .; }
+# Порт занят, если его слушает процесс или его публикует Docker (контейнеры Amnezia):
+# правило DNAT Docker есть, даже когда docker-proxy отключён и ss порт не видит.
+udp_busy() {
+  ss -Huln "sport = :$1" | grep -q . && return 0
+  iptables -t nat -S DOCKER 2>/dev/null | grep -E -- "-p udp" | grep -qE -- "--dport $1( |\$)"
+}
 tcp_busy() { ss -Htln "sport = :$1" | grep -q .; }
 iface_taken() {
   ip link show "$1" >/dev/null 2>&1 || [[ -f "/etc/amnezia/amneziawg/$1.conf" ]] \
@@ -183,7 +188,7 @@ if [[ -n "$NODE_KEY" ]]; then
     fi
   fi
   echo "net.ipv4.ip_forward = 1" > /etc/sysctl.d/99-amneziawg.conf
-  sysctl --system >/dev/null
+  sysctl -qw net.ipv4.ip_forward=1
   WAN=$(ip -4 route show default | awk '{for(i=1;i<=NF;i++) if($i=="dev"){print $(i+1); exit}}')
   install -d -m 700 "$CONF_DIR"
   printf 'IFACE=%s\nPORT=%s\nWAN=%s\n' "$IFACE" "$AWG_PORT" "$WAN" > $NODE_CONF
@@ -269,7 +274,9 @@ log "Включение пересылки IP-пакетов"
 cat > /etc/sysctl.d/99-amneziawg.conf <<SYSCTL
 net.ipv4.ip_forward = 1
 SYSCTL
-sysctl --system >/dev/null
+# Только этот параметр: sysctl --system перечитал бы все файлы и мог сбросить значения,
+# выставленные Docker на лету.
+sysctl -qw net.ipv4.ip_forward=1
 
 WAN=$(ip -4 route show default | awk '{for(i=1;i<=NF;i++) if($i=="dev"){print $(i+1); exit}}')
 [[ -n "$ENDPOINT" ]] || ENDPOINT=$(curl -4 -fsS --max-time 5 https://api.ipify.org || ip -4 addr show "$WAN" | awk '/inet /{sub(/\/.*/,"",$2); print $2; exit}')
