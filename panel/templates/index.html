@@ -26,6 +26,7 @@
     <h2>Клиенты</h2>
     <div class="list-tools">
       <input type="search" id="search" placeholder="Поиск: имя, IP, заметка">
+      <select id="server-filter" title="Сервер" aria-label="Сервер" hidden></select>
       <select id="sort" title="Сортировка" aria-label="Сортировка">
         <option value="created">Сначала старые</option>
         <option value="expires">По окончанию срока</option>
@@ -78,13 +79,10 @@
       <label>Период <select name="limit_period">
         <option value="month">в месяц</option><option value="total">всего</option></select></label>
     </div>
-    {% if s.cascade %}
-    <label>Маршрут <select name="via">
-      <option value="direct">Напрямую — {{ s.endpoint }}:{{ s.port }}</option>
-      <option value="cascade">Через каскад — {{ s.cascade }}</option>
-    </select></label>
-    <p class="muted small">Каскад — для мобильного интернета: подключение идёт через входной сервер.</p>
-    {% endif %}
+    <div class="conn-field" hidden>
+      <label>Подключение <select name="conn"></select></label>
+      <p class="muted small">Каскад — для мобильного интернета: подключение идёт через входной сервер.</p>
+    </div>
     <div class="modal-actions">
       <button type="button" class="btn" value="cancel" onclick="this.closest('dialog').close()">Отмена</button>
       <button class="btn primary">Создать</button>
@@ -132,6 +130,10 @@
         <option value="month">в месяц</option><option value="total">всего</option></select></label>
     </div>
     <p class="muted small" id="limits-usage"></p>
+    <div class="node-field" hidden>
+      <label>Сервер <select name="node"></select></label>
+      <p class="muted small">После переноса на другой сервер клиенту нужно выдать новый конфиг.</p>
+    </div>
     <label class="check"><span><input type="checkbox" name="reset_usage"> Сбросить счётчик трафика</span></label>
     <p class="muted small">Пустые поля — без ограничений. При превышении лимита или по истечении срока
        клиент отключается автоматически; месячный лимит сбрасывается 1-го числа.</p>

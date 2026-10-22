@@ -10,6 +10,10 @@ const listEl = $("#clients");
 const rows = new Map();      // id -> {el, prev, hist}
 let clients = [];
 let cascade = null;          // адрес входного сервера каскада, если настроен
+let servers = [];            // [{id, name, endpoint, cascade, up}] — этот и дополнительные
+let serverFilter = "";
+try { serverFilter = localStorage.getItem("server") || ""; } catch {}
+const srvOf = (c) => servers.find((s) => s.id === c.node) || servers[0] || {};
 let filter = "";
 
 // ---------------------------------------------------------------- утилиты
@@ -238,7 +242,8 @@ function updateRow(row, c, now) {
   row.seen.textContent = c.enabled ? (c.online ? "в сети" : fmtAgo(c.handshake, now))
                                    : (REASONS[c.disabled_reason] || "отключён");
   row.seen.className = c.online ? "on" : (REASONS[c.disabled_reason] ? "reason" : "");
-  row.link.textContent = (c.via === "cascade" && cascade ? "⇄ каскад  " : "") +
+  row.link.textContent = (servers.length > 1 ? `▣ ${srvOf(c).name}  ` : "") +
+                         (c.via === "cascade" && srvOf(c).cascade ? "⇄ каскад  " : "") +
                          (c.share_expires ? "🔗 ссылка активна" : "");
   row.link.title = c.share_expires ? `Одноразовая ссылка действует до ${new Date(c.share_expires * 1000).toLocaleString("ru-RU")}` : "";
 
@@ -308,6 +313,7 @@ function inGroup(c, g, now) {
 
 function matches(c) {
   if (lastData && !inGroup(c, tab, lastData.now)) return false;
+  if (serverFilter && servers.length > 1 && c.node !== serverFilter) return false;
   if (!filter) return true;
   return c.name.toLowerCase().includes(filter) || c.ip.includes(filter) ||
          (c.note || "").toLowerCase().includes(filter);
@@ -375,8 +381,40 @@ function render(data) {
   $("#st-tx").textContent = fmtBytes(tx);
   $("#st-rx").textContent = fmtBytes(rx);
   const st = $("#srv-status");
-  st.textContent = data.up ? "работает" : "остановлен";
-  st.className = "chip " + (data.up ? "ok" : "bad");
+  const down = servers.filter((s) => s.up === false);
+  if (servers.length > 1) {
+    st.textContent = down.length ? `не отвечает: ${down.map((s) => s.name).join(", ")}` : `серверы работают (${servers.length})`;
+    st.className = "chip " + (down.length ? "bad" : "ok");
+    st.title = down.map((s) => `${s.name}: ${s.error || "нет ответа"}`).join("\n");
+  } else {
+    st.textContent = data.up ? "работает" : "остановлен";
+    st.className = "chip " + (data.up ? "ok" : "bad");
+  }
+}
+
+// Списки серверов в фильтре и модалках — по данным с сервера.
+function syncServers(data) {
+  const sig = JSON.stringify((data.servers || []).map((s) => [s.id, s.name, s.endpoint, s.cascade]));
+  servers = data.servers || [];
+  if (sig === syncServers.sig) return;
+  syncServers.sig = sig;
+  const sf = $("#server-filter");
+  sf.hidden = servers.length < 2;
+  sf.replaceChildren(new Option("Все серверы", ""), ...servers.map((s) => new Option(s.name, s.id)));
+  if (!servers.some((s) => s.id === serverFilter)) serverFilter = "";
+  sf.value = serverFilter;
+  const conn = $("#form-create").conn;
+  const opts = [];
+  for (const s of servers) {
+    const who = servers.length > 1 ? `${s.name} — ` : "";
+    opts.push(new Option(`${who}напрямую (${s.endpoint})`, `${s.id}|direct`));
+    if (s.cascade) opts.push(new Option(`${who}через каскад (${s.cascade})`, `${s.id}|cascade`));
+  }
+  conn.replaceChildren(...opts);
+  $("#form-create .conn-field").hidden = opts.length < 2;
+  const nf = $("#form-limits").node;
+  nf.replaceChildren(...servers.map((s) => new Option(`${s.name} (${s.endpoint})`, s.id)));
+  $("#form-limits .node-field").hidden = servers.length < 2;
 }
 
 async function poll() {
@@ -384,6 +422,7 @@ async function poll() {
     const data = await api("GET", "/api/clients");
     clients = data.clients;
     cascade = data.cascade;
+    syncServers(data);
     render(data);
   } catch (e) {
     if (e.message !== "auth") $("#srv-status").textContent = "нет связи";
@@ -500,6 +539,8 @@ function openCreate() {
   updateDateHint(f);
   const def = f.querySelector(`.presets button[data-months="${DEFAULT_MONTHS}"]`);
   if (def) def.classList.add("active");
+  let last = ""; try { last = localStorage.getItem("conn") || ""; } catch {}
+  if ([...f.conn.options].some((o) => o.value === last)) f.conn.value = last;
   $("#dlg-create").showModal();
   f.name.focus();
 }
@@ -507,9 +548,11 @@ function openCreate() {
 $("#form-create").addEventListener("submit", async (e) => {
   e.preventDefault();
   const f = e.target;
+  const [node, via] = (f.conn.value || "local|direct").split("|");
+  try { localStorage.setItem("conn", f.conn.value); } catch {}
   try {
     const { id } = await api("POST", "/api/clients", {
-      name: f.name.value, expires: f.expires.value, via: f.via ? f.via.value : "direct",
+      name: f.name.value, expires: f.expires.value, node, via,
       limit_gb: f.limit_gb.value, limit_period: f.limit_period.value,
       trial: f.trial.checked, note: f.note.value,
     });
@@ -522,7 +565,8 @@ $("#form-create").addEventListener("submit", async (e) => {
 
 let qrId = null;
 function showRoute(via) {
-  $("#qr-route").hidden = !cascade;
+  const c = clients.find((x) => x.id === qrId);
+  $("#qr-route").hidden = !(c && srvOf(c).cascade);
   $("#qr-route").querySelectorAll("button").forEach((b) =>
     b.classList.toggle("active", b.dataset.via === via));
 }
@@ -567,6 +611,8 @@ function openLimits(id) {
   f.limit_period.value = c.limit_bytes ? c.limit_period : "month";
   f.note.value = c.note || "";
   f.trial.checked = !!c.trial;
+  f.node.value = c.node;
+  f.dataset.node = c.node;
   $("#limits-usage").textContent = `Израсходовано: ${fmtBytes(c.rx + c.tx)} ` +
     `(↓ ${fmtBytes(c.tx)}, ↑ ${fmtBytes(c.rx)})`;
   $("#dlg-limits").showModal();
@@ -579,9 +625,10 @@ $("#form-limits").addEventListener("submit", async (e) => {
       expires: f.expires.value, limit_gb: f.limit_gb.value,
       limit_period: f.limit_period.value, reset_usage: f.reset_usage.checked,
       trial: f.trial.checked, note: f.note.value,
+      ...(f.node.value && f.node.value !== f.dataset.node ? { node: f.node.value } : {}),
     });
     $("#dlg-limits").close();
-    toast("Сохранено");
+    toast(f.node.value !== f.dataset.node ? "Клиент перенесён — выдайте ему новый конфиг" : "Сохранено");
     refresh();
   } catch (err) { toast(err.message, true); }
 });
@@ -712,6 +759,7 @@ async function refresh() {
   const data = await api("GET", "/api/clients");
   clients = data.clients;
   cascade = data.cascade;
+  syncServers(data);
   render(data);
 }
 
@@ -720,6 +768,11 @@ $("#sort").value = sortBy;
 $("#sort").addEventListener("change", (e) => {
   sortBy = e.target.value;
   try { localStorage.setItem("sort", sortBy); } catch {}
+  if (lastData) render(lastData);
+});
+$("#server-filter").addEventListener("change", (e) => {
+  serverFilter = e.target.value;
+  try { localStorage.setItem("server", serverFilter); } catch {}
   if (lastData) render(lastData);
 });
 $("#search").addEventListener("input", (e) => {

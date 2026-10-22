@@ -19,6 +19,7 @@ from werkzeug.security import check_password_hash, generate_password_hash
 
 import awg
 import jobs
+import nodes
 import totp
 
 PANEL_FILE = os.path.join(awg.STATE_DIR, "panel.json")
@@ -250,12 +251,37 @@ def api_clients():
             "online": c["enabled"] and bool(hs) and now - hs < 180,
             "share_expires": shares.get(c["id"]),
             "via": c.get("via", "direct"),
+            "node": awg.node_id(c),
             "trial": bool(c.get("trial")), "note": c.get("note", ""),
             # конфиг на устройстве со старым адресом (сменили Endpoint, порт или маршрут)
             "stale": bool(c.get("issued")) and c["issued"] != awg.client_endpoint(state, c),
         })
-    return {"up": live is not None, "now": int(now), "clients": out,
-            "cascade": state["server"].get("cascade") or None}
+    return {"up": awg.LOCAL not in live.down, "now": int(now), "clients": out,
+            "cascade": state["server"].get("cascade") or None,
+            "servers": servers_info(state, live)}
+
+
+def servers_info(state, live=None):
+    """Серверы панели для интерфейса: этот и дополнительные."""
+    out = []
+    for nid, srv in [(awg.LOCAL, state["server"])] + [(n["id"], n) for n in state.get("nodes", [])]:
+        out.append({
+            "id": nid, "name": awg.server_name(state, nid),
+            "endpoint": f"{srv['endpoint']}:{srv['port']}", "cascade": srv.get("cascade") or None,
+            "up": None if live is None else nid not in live.down,
+            "error": None if nid == awg.LOCAL else nodes.error(nid),
+            "clients": sum(1 for c in state["clients"] if awg.node_id(c) == nid),
+        })
+    return out
+
+
+def _parse_node(state, val):
+    nid = str(val or awg.LOCAL)
+    try:
+        awg.server_by_id(state, nid)
+    except KeyError:
+        abort(400, "Такого сервера нет")
+    return nid
 
 
 @app.post("/api/clients")
@@ -268,9 +294,10 @@ def api_create():
     expires = _parse_expires(data.get("expires"))       # до try: 400, а не 500
     via = "cascade" if data.get("via") == "cascade" else "direct"
     note = str(data.get("note", "")).strip()[:200]
+    node = _parse_node(awg.load(), data.get("node"))
     try:
         c = awg.add_client(name, expires=expires, limit_bytes=limit, limit_period=period, via=via,
-                           trial=bool(data.get("trial")), note=note)
+                           trial=bool(data.get("trial")), note=note, node=node)
     except Exception as e:  # noqa: BLE001
         app.logger.exception("Не удалось создать клиента %r", name)
         return {"error": str(e)}, 500
@@ -301,6 +328,8 @@ def api_update(cid):
         fields["trial"] = bool(data["trial"])
     if "note" in data:
         fields["note"] = str(data["note"]).strip()[:200]
+    if "node" in data:
+        fields["node"] = _parse_node(awg.load(), data["node"])
     try:
         awg.update_client(cid, **fields)
     except ValueError as e:
@@ -427,6 +456,7 @@ def _settings():
         try:
             if action == "server":
                 awg.remember_issued(state)
+                s["name"] = request.form.get("name", "").strip()[:40]
                 s["endpoint"] = request.form["endpoint"].strip()
                 cascade = request.form.get("cascade", "").strip()
                 if cascade and not re.fullmatch(r"[A-Za-z0-9.-]+:\d{1,5}", cascade):
@@ -454,6 +484,27 @@ def _settings():
                 awg.save(state)
                 awg.apply(state, restart=True)
                 flash("Параметры перегенерированы. Обновите конфиги у всех клиентов!", "ok")
+            elif action == "node_add":
+                n = nodes.add_node(request.form.get("name", ""), request.form.get("ssh", ""),
+                                   request.form.get("endpoint", ""))
+                flash(f"Сервер «{n['name']}» подключён: {n['endpoint']}:{n['port']}, подсеть {n['subnet']}", "ok")
+            elif action == "node_update":
+                cascade = request.form.get("cascade", "").strip()
+                if cascade and not re.fullmatch(r"[A-Za-z0-9.-]+:\d{1,5}", cascade):
+                    raise ValueError("Адрес каскада укажите как IP:порт, например 95.163.1.2:443")
+                fields = {"name": request.form.get("name", "").strip()[:40] or "Сервер",
+                          "endpoint": request.form["endpoint"].strip(), "cascade": cascade,
+                          "dns": request.form["dns"].strip(), "mtu": int(request.form["mtu"])}
+                nodes.update_node(request.form["id"], fields)
+                flash(f"Сервер «{fields['name']}» сохранён", "ok")
+            elif action == "node_delete":
+                nodes.delete_node(request.form["id"])
+                flash("Сервер удалён из панели. На нём самом туннель можно остановить: "
+                      "systemctl disable --now awg3-quick@<интерфейс>", "ok")
+            elif action == "node_push":
+                n = awg.server_by_id(state, request.form["id"])
+                nodes.push(state, n, force=True)
+                flash(f"Конфиг отправлен на «{n['name']}»", "ok")
             elif action == "restart":
                 awg.apply(state, restart=True)
                 flash("Интерфейс перезапущен", "ok")
@@ -519,7 +570,12 @@ def _settings():
                    qr=buf.getvalue().decode())
     return render_template("settings.html", s=s, keys=keys, server_conf=awg.server_conf(state),
                            notify=n, token_masked=masked, tfa=tfa, backups=jobs.list_backups(),
-                           backup_dir=jobs.BACKUP_DIR, endpoint_is_ip=_is_ip(s["endpoint"]))
+                           backup_dir=jobs.BACKUP_DIR, endpoint_is_ip=_is_ip(s["endpoint"]),
+                           servers=servers_info(state, awg.status(state)), node_list=state.get("nodes", []),
+                           node_key=nodes.public_key(), repo_branch=REPO_BRANCH)
+
+
+REPO_BRANCH = "claude/amnesiawg-web-panel-1kuz00"
 
 
 def _is_ip(host):
@@ -603,6 +659,7 @@ def cli():
     se = sub.add_parser("set-endpoint", help="адрес сервера (лучше домен) для конфигов клиентов")
     se.add_argument("endpoint")
     sub.add_parser("render", help="записать серверный конфиг из state.json")
+    sub.add_parser("apply", help="применить конфиг к работающему туннелю без перезапуска")
     sub.add_parser("disable-2fa", help="отключить двухфакторный вход (если потерян телефон и коды)")
     a = p.parse_args()
     with awg._lock:
@@ -638,6 +695,8 @@ def _run_cli(a):
         print(f"Endpoint: {old} → {a.endpoint}")
     elif a.cmd == "render":
         awg.write_conf(awg.load())
+    elif a.cmd == "apply":
+        awg.apply(awg.load())
     elif a.cmd == "disable-2fa":
         cfg = load_panel()
         for k in ("totp_enabled", "totp_secret", "totp_last", "totp_recovery"):
@@ -650,13 +709,13 @@ def _check_loop():
     while True:
         time.sleep(15)
         try:
-            events, up = awg.check()
+            events, down = awg.check()
         except Exception as e:  # noqa: BLE001
             app.logger.warning("Проверка трафика и сроков клиентов: %s", e)
-            events, up = [], False
+            events, down = [], (awg.LOCAL,)
         try:
             # Уведомления в Telegram, ночная резервная копия, утренняя сводка.
-            jobs.tick(events, up, log=app.logger.warning)
+            jobs.tick(events, down, log=app.logger.warning)
         except Exception as e:  # noqa: BLE001
             app.logger.warning("Фоновые задачи: %s", e)
 

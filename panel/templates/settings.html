@@ -5,6 +5,7 @@
   <form method="post" class="form-grid">
     <input type="hidden" name="csrf" value="{{ csrf_token() }}">
     <input type="hidden" name="action" value="server">
+    <label>Название сервера <input name="name" value="{{ s.get('name', '') }}" placeholder="Основной" maxlength="40"></label>
     <label>Endpoint (IP/домен) <input name="endpoint" value="{{ s.endpoint }}" required></label>
     <label>UDP-порт <input name="port" type="number" min="1" max="65535" value="{{ s.port }}"></label>
     <label>DNS для клиентов <input name="dns" value="{{ s.dns }}"></label>
@@ -27,6 +28,67 @@
   <p class="muted small">Каскад: телефон подключается к входному серверу (например, в РФ), тот пересылает
      трафик сюда. Входной сервер настраивается скриптом <code>cascade/entry.sh</code> из репозитория.
      Маршрут выбирается у каждого клиента в окне QR-кода.</p>
+</div>
+
+<div class="card" id="servers">
+  <h2>Серверы</h2>
+  <p class="muted small">Одна панель — несколько серверов: у каждого клиента свой сервер (выбирается при
+     создании и в «Настройках клиента»). На дополнительных серверах своей панели нет — панель управляет
+     ими по SSH-ключу, которым можно только применить конфиг и прочитать счётчики.</p>
+  <table class="servers">
+    {% for sv in servers %}
+    <tr>
+      <td><b>{{ sv.name }}</b>{% if loop.first %} <span class="muted small">(этот)</span>{% endif %}</td>
+      <td><code>{{ sv.endpoint }}</code>{% if sv.cascade %}<br><span class="muted small">каскад {{ sv.cascade }}</span>{% endif %}</td>
+      <td class="muted">клиентов: {{ sv.clients }}</td>
+      <td>{% if sv.up %}<span class="chip ok">работает</span>{% else %}<span class="chip bad" title="{{ sv.error or '' }}">не отвечает</span>{% endif %}</td>
+    </tr>
+    {% if sv.error %}<tr><td colspan="4" class="muted small">⚠ {{ sv.error }}</td></tr>{% endif %}
+    {% endfor %}
+  </table>
+
+  {% for n in node_list %}
+  <details class="node">
+    <summary>Изменить «{{ n.name }}» <span class="muted small">— интерфейс {{ n.iface }}, подсеть {{ n.subnet }}, SSH {{ n.ssh }}</span></summary>
+    <form method="post" class="form-grid">
+      <input type="hidden" name="csrf" value="{{ csrf_token() }}">
+      <input type="hidden" name="id" value="{{ n.id }}">
+      <label>Название <input name="name" value="{{ n.name }}" maxlength="40"></label>
+      <label>Endpoint (IP/домен) <input name="endpoint" value="{{ n.endpoint }}" required></label>
+      <label>DNS для клиентов <input name="dns" value="{{ n.dns }}"></label>
+      <label>MTU <input name="mtu" type="number" min="1280" max="1500" value="{{ n.mtu }}"></label>
+      <label>Адрес каскада (IP:порт входного сервера)
+        <input name="cascade" value="{{ n.cascade or '' }}" placeholder="например 95.163.1.2:443"></label>
+      <div class="btn-row">
+        <button name="action" value="node_update">Сохранить</button>
+        <button name="action" value="node_push" class="secondary" formnovalidate>Отправить конфиг заново</button>
+        <button name="action" value="node_delete" class="danger" formnovalidate
+                onclick="return confirm('Убрать сервер из панели? Клиентов на нём быть не должно.')">Удалить</button>
+      </div>
+    </form>
+  </details>
+  {% endfor %}
+
+  <details class="node" {% if not node_list %}open{% endif %}>
+    <summary><b>Добавить сервер</b></summary>
+    <ol class="muted small steps">
+      <li>Новый VPS с Ubuntu 22.04/24.04. Зайдите на него в PuTTY под root и выполните (одной строкой):
+        <pre class="copyable" id="node-cmd">git clone -b {{ repo_branch }} https://github.com/g79175929220-tech/amneziawg.git &amp;&amp; cd amneziawg &amp;&amp; bash install.sh --node "{{ node_key }}"</pre>
+        <button type="button" class="secondary small" onclick="navigator.clipboard.writeText(document.getElementById('node-cmd').textContent).then(()=>this.textContent='Скопировано')">Копировать команду</button>
+      </li>
+      <li>Откройте на нём UDP-порт, который покажет установщик (обычно 51820), в файрволе хостинга.</li>
+      <li>Укажите его адрес ниже и нажмите «Подключить».</li>
+    </ol>
+    <form method="post" class="form-grid">
+      <input type="hidden" name="csrf" value="{{ csrf_token() }}">
+      <input type="hidden" name="action" value="node_add">
+      <label>Название <input name="name" placeholder="например, Нидерланды · ПК" maxlength="40" required></label>
+      <label>Адрес для SSH <input name="ssh" placeholder="IP, при другом порте — IP:2222" required></label>
+      <label><span>Endpoint для клиентов <span class="muted">(необязательно — IP сервера)</span></span>
+        <input name="endpoint" placeholder="IP или домен"></label>
+      <div><button>Подключить</button></div>
+    </form>
+  </details>
 </div>
 
 <div class="card">

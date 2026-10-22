@@ -3,6 +3,9 @@
 # Запуск: sudo bash install.sh [--port 51820] [--panel-port 8443] [--endpoint IP]
 #                              [--proto 3|2|1] [--iface awg3] [--subnet 10.9.0.0/24]
 #                              [--restore awg-backup-....tar.gz]   перенос с другого сервера
+#        sudo bash install.sh --node "ssh-ed25519 AAAA... awg-panel"
+#                              дополнительный сервер без своей панели: им управляет панель,
+#                              чей ключ указан (Настройки → Серверы)
 #
 # AmneziaWG 3.1 ставится изолированно в /opt/awg3 (userspace amneziawg-go + awg-tools 3.1),
 # конфиги — в /etc/awg3, юнит — awg3-quick@. Системные awg/awg-quick, модуль ядра и уже
@@ -22,6 +25,7 @@ PROTO=3
 IFACE=""
 SUBNET=""
 RESTORE=""
+NODE_KEY=""
 USER_PORT=0
 SRC_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
@@ -34,6 +38,7 @@ while [[ $# -gt 0 ]]; do
     --iface) IFACE="$2"; shift 2 ;;
     --subnet) SUBNET="$2"; shift 2 ;;
     --restore) RESTORE="$(realpath "$2")"; shift 2 ;;
+    --node) NODE_KEY="$2"; shift 2 ;;
     *) echo "Неизвестный параметр: $1"; exit 1 ;;
   esac
 done
@@ -156,6 +161,50 @@ iface_taken() {
     || [[ -f "/etc/wireguard/$1.conf" ]]
 }
 
+# ------------------------------------------- дополнительный сервер под управлением панели
+if [[ -n "$NODE_KEY" ]]; then
+  NODE_KEY=$(echo "$NODE_KEY" | tr -d '\r' | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')
+  [[ "$NODE_KEY" =~ ^ssh-ed25519\ [A-Za-z0-9+/=]+ ]] && ssh-keygen -lf <(echo "$NODE_KEY") >/dev/null 2>&1 \
+    || { echo "Ключ панели не похож на ssh-ed25519 ... — скопируйте его целиком из Настройки → Серверы"; exit 1; }
+  NODE_CONF=/etc/awg-node.conf
+  if [[ -f $NODE_CONF ]]; then
+    . $NODE_CONF; AWG_PORT=$PORT
+    log "Сервер уже подключался к панели: интерфейс $IFACE, порт $AWG_PORT"
+  else
+    if [[ -z "$IFACE" ]]; then
+      i=3; while iface_taken "awg$i"; do i=$((i+1)); done; IFACE="awg$i"
+    elif iface_taken "$IFACE"; then
+      echo "Интерфейс $IFACE уже занят. Укажите другой, например --iface awg4"; exit 1
+    fi
+    if udp_busy "$AWG_PORT"; then
+      if [[ $USER_PORT == 1 ]]; then echo "UDP-порт $AWG_PORT уже занят"; exit 1; fi
+      while udp_busy "$AWG_PORT"; do AWG_PORT=$((AWG_PORT+1)); done
+      warn "UDP-порт занят, беру свободный: $AWG_PORT"
+    fi
+  fi
+  echo "net.ipv4.ip_forward = 1" > /etc/sysctl.d/99-amneziawg.conf
+  sysctl --system >/dev/null
+  WAN=$(ip -4 route show default | awk '{for(i=1;i<=NF;i++) if($i=="dev"){print $(i+1); exit}}')
+  install -d -m 700 "$CONF_DIR"
+  printf 'IFACE=%s\nPORT=%s\nWAN=%s\n' "$IFACE" "$AWG_PORT" "$WAN" > $NODE_CONF
+  install -m 0755 "$SRC_DIR/node/awg-node" /usr/local/sbin/awg-node
+  # Ключ панели: только вызов агента — без shell, проброса портов и т.п.
+  install -d -m 700 /root/.ssh; touch /root/.ssh/authorized_keys; chmod 600 /root/.ssh/authorized_keys
+  BODY=$(echo "$NODE_KEY" | awk '{print $2}')
+  grep -vF "$BODY" /root/.ssh/authorized_keys > /root/.ssh/authorized_keys.new || true
+  echo "command=\"/usr/local/sbin/awg-node\",no-port-forwarding,no-X11-forwarding,no-agent-forwarding,no-pty $NODE_KEY" \
+    >> /root/.ssh/authorized_keys.new
+  mv /root/.ssh/authorized_keys.new /root/.ssh/authorized_keys
+  if command -v ufw >/dev/null && ufw status | grep -q active; then ufw allow "$AWG_PORT/udp"; fi
+  IP=$(curl -4 -fsS --max-time 5 https://api.ipify.org || ip -4 addr show "$WAN" | awk '/inet /{sub(/\/.*/,"",$2); print $2; exit}')
+  echo
+  log "Готово! Сервер ждёт панель."
+  echo "  AmneziaWG 3.1: интерфейс $IFACE, UDP-порт $AWG_PORT (откройте его в файрволе хостинга)"
+  echo "  В панели: Настройки → Серверы → Добавить, адрес: $IP"
+  echo "  Туннель поднимется, когда панель пришлёт конфиг. Своей панели здесь нет."
+  exit 0
+fi
+
 if [[ -n "$RESTORE" ]]; then
   [[ -f "$RESTORE" ]] || { echo "Файл копии не найден: $RESTORE"; exit 1; }
   log "Восстановление из копии $(basename "$RESTORE")"
@@ -249,10 +298,16 @@ AWG_PORT=$(python3 -c 'import json,sys;print(json.load(open(sys.argv[1]))["serve
 SUBNET=$(python3 -c 'import json,sys;print(json.load(open(sys.argv[1]))["server"]["subnet"])' "$STATE")
 PROTO=$(python3 -c 'import json,sys;print(json.load(open(sys.argv[1]))["server"]["proto"])' "$STATE")
 
-log "Запуск awg3-quick@$IFACE"
 systemctl enable "awg3-quick@$IFACE" >/dev/null 2>&1
-if ! systemctl restart "awg3-quick@$IFACE"; then
-  journalctl -u "awg3-quick@$IFACE" --no-pager -n 30; exit 1
+if systemctl is-active -q "awg3-quick@$IFACE" && [[ -z "$RESTORE" ]]; then
+  # Повторный запуск (обновление): применяем конфиг без перезапуска — клиенты не отключаются.
+  log "Туннель awg3-quick@$IFACE уже работает — применяю конфиг без перезапуска"
+  $PANEL_PY apply || systemctl restart "awg3-quick@$IFACE"
+else
+  log "Запуск awg3-quick@$IFACE"
+  if ! systemctl restart "awg3-quick@$IFACE"; then
+    journalctl -u "awg3-quick@$IFACE" --no-pager -n 30; exit 1
+  fi
 fi
 
 if [[ ! -f /etc/awg-panel/panel.json ]]; then

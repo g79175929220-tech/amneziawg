@@ -1,0 +1,53 @@
+#!/bin/bash
+# Агент дополнительного сервера AmneziaWG: его вызывает панель по SSH.
+# Ключ панели в authorized_keys ограничен этой командой (command="..."), поэтому
+# через него можно только:
+#   info   — интерфейс, порт, внешний интерфейс, IP и занятые сети (JSON)
+#   dump   — счётчики клиентов (awg show <iface> dump)
+#   apply  — принять конфиг сервера из stdin и применить его
+# Настройки агента: /etc/awg-node.conf (IFACE, PORT, WAN), их пишет install.sh --node.
+set -euo pipefail
+. /etc/awg-node.conf
+export PATH=/opt/awg3/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+CONF=/etc/awg3/$IFACE.conf
+UNIT=awg3-quick@$IFACE
+
+# Секция [Interface] без комментариев: если она не изменилась, хватает syncconf
+# (подключённые клиенты не замечают), иначе интерфейс перезапускается.
+iface_part() { sed '/^\[Peer\]/,$d' "$1" 2>/dev/null | grep -v -e '^[[:space:]]*#' -e '^[[:space:]]*$' || true; }
+
+case "${SSH_ORIGINAL_COMMAND:-${1:-}}" in
+  info)
+    IP=$(curl -4 -fsS --max-time 5 https://api.ipify.org 2>/dev/null \
+         || ip -4 addr show "$WAN" | awk '/inet /{sub(/\/.*/,"",$2); print $2; exit}')
+    UP=false; systemctl is-active -q "$UNIT" && UP=true
+    NETS=$( { ip -4 -o addr | awk '{print $4}'; ip -4 route | awk '{print $1}'; } | sort -u | tr '\n' ' ')
+    python3 - "$IFACE" "$PORT" "$WAN" "$IP" "$UP" "$(cat /opt/awg3/VERSION 2>/dev/null)" $NETS <<'PY'
+import json, sys
+a = sys.argv[1:]
+print(json.dumps({"iface": a[0], "port": int(a[1]), "wan": a[2], "public_ip": a[3],
+                  "up": a[4] == "true", "version": a[5], "nets": [n for n in a[6:] if "/" in n or n[0].isdigit()]}))
+PY
+    ;;
+  dump)
+    awg show "$IFACE" dump
+    ;;
+  apply)
+    tmp=$(mktemp /etc/awg3/.incoming.XXXXXX)
+    trap 'rm -f "$tmp"' EXIT
+    head -c 4000000 > "$tmp"
+    grep -q '^\[Interface\]' "$tmp" || { echo "это не конфиг AmneziaWG" >&2; exit 1; }
+    grep -q "^ListenPort = $PORT\$" "$tmp" || { echo "порт в конфиге не совпадает с $PORT" >&2; exit 1; }
+    same=0; [[ "$(iface_part "$tmp")" == "$(iface_part "$CONF")" ]] && same=1
+    chmod 600 "$tmp"; mv "$tmp" "$CONF"; trap - EXIT
+    systemctl enable -q "$UNIT" 2>/dev/null || true
+    if [[ $same == 1 ]] && systemctl is-active -q "$UNIT"; then
+      awg syncconf "$IFACE" <(awg-quick strip "$CONF")
+    else
+      systemctl restart "$UNIT"
+    fi
+    echo ok
+    ;;
+  *)
+    echo "awg-node: допустимы info, dump, apply" >&2; exit 2 ;;
+esac

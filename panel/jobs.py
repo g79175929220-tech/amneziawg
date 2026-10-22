@@ -23,7 +23,8 @@ import awg
 BACKUP_DIR = os.environ.get("AWG_BACKUP_DIR", "/var/backups/awg-panel")
 BACKUP_KEEP = 14
 BACKUP_HOUR = 3                     # ночная копия, по часовому поясу из настроек
-BACKUP_FILES = ("state.json", "panel.json", "panel.env")
+BACKUP_FILES = ("state.json", "panel.json", "panel.env",
+                "node_ed25519", "node_ed25519.pub", "known_hosts")   # доступ к доп. серверам
 BACKUP_RE = re.compile(r"^awg-backup-\d{8}-\d{6}\.tar\.gz$")
 
 DEFAULT_NOTIFY = {
@@ -308,11 +309,14 @@ def event_text(state, ev):
 
 # ------------------------------------------------------------------ расписание
 
-_tunnel = {"fails": 0, "down": False}
+_tunnel = {}        # id сервера -> {"fails": n, "down": bool}
 
 
-def tick(events, tunnel_up, log=print):
-    """Вызывается фоновым потоком панели после awg.check() (раз в 15 секунд)."""
+def tick(events, down=(), log=print):
+    """Вызывается фоновым потоком панели после awg.check() (раз в 15 секунд).
+    down — серверы, которые не ответили (awg.LOCAL — этот)."""
+    if isinstance(down, bool):                  # старый вызов: tick(events, tunnel_up)
+        down = () if down else (awg.LOCAL,)
     state = awg.load()
     cfg = settings(state)
     tg_on = bool(cfg["token"] and cfg["chat_id"])
@@ -320,16 +324,21 @@ def tick(events, tunnel_up, log=print):
     if tg_on and cfg["alerts"]:
         for ev in events:
             _safe(lambda: send(event_text(state, ev), cfg), log)
-        # Туннель: тревога после двух неудачных проверок подряд (~30 с), чтобы не шуметь.
-        _tunnel["fails"] = 0 if tunnel_up else _tunnel["fails"] + 1
-        if _tunnel["fails"] >= 2 and not _tunnel["down"]:
-            _tunnel["down"] = True
-            _safe(lambda: send(f"🔴 <b>Туннель {_h(state['server']['iface'])} не отвечает</b>\n"
-                               f"{_h(server_title(state))}\nКлиенты не могут подключиться.", cfg), log)
-        elif tunnel_up and _tunnel["down"]:
-            _tunnel["down"] = False
-            _safe(lambda: send(f"🟢 Туннель {_h(state['server']['iface'])} снова работает\n"
-                               f"{_h(server_title(state))}", cfg), log)
+        # Тревога после двух неудачных проверок подряд (~30 с), чтобы не шуметь.
+        srvs = [(awg.LOCAL, state["server"])] + [(n["id"], n) for n in state.get("nodes", [])]
+        for nid, srv in srvs:
+            t = _tunnel.setdefault(nid, {"fails": 0, "down": False})
+            up = nid not in down
+            t["fails"] = 0 if up else t["fails"] + 1
+            title = f"{awg.server_name(state, nid)} · {srv['endpoint']}:{srv['port']}"
+            if t["fails"] >= 2 and not t["down"]:
+                t["down"] = True
+                err = "" if nid == awg.LOCAL else f"\n<i>{_h(_node_error(nid))}</i>"
+                _safe(lambda: send(f"🔴 <b>Сервер не отвечает</b>: {_h(title)}\n"
+                                   f"Его клиенты не могут подключиться.{err}", cfg), log)
+            elif up and t["down"]:
+                t["down"] = False
+                _safe(lambda: send(f"🟢 Сервер снова работает: {_h(title)}", cfg), log)
 
     now = _now_local(cfg)
     today = now.strftime("%Y-%m-%d")
@@ -349,6 +358,11 @@ def send_backup(path, cfg, state):
         tg(cfg["token"], "sendDocument",
            {"chat_id": cfg["chat_id"], "caption": f"💾 Резервная копия · {server_title(state)}"},
            files={"document": (os.path.basename(path), f.read())}, timeout=60)
+
+
+def _node_error(nid):
+    import nodes
+    return nodes.error(nid) or ""
 
 
 def _mark(state, job, day):

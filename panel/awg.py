@@ -6,6 +6,7 @@ import json
 import os
 import secrets
 import subprocess
+import sys
 import tempfile
 import threading
 import time
@@ -169,6 +170,38 @@ def init_state(endpoint, port, wan, subnet="10.8.0.0/24", dns="1.1.1.1, 1.0.0.1"
     return state
 
 
+LOCAL = "local"
+
+
+def node_of(state, c):
+    """Сервер, на котором клиент: state["server"] (этот) или запись из state["nodes"]."""
+    nid = c.get("node") or LOCAL
+    if nid != LOCAL:
+        for n in state.get("nodes", []):
+            if n["id"] == nid:
+                return n
+    return state["server"]
+
+
+def node_id(c):
+    return c.get("node") or LOCAL
+
+
+def server_by_id(state, nid):
+    if nid == LOCAL:
+        return state["server"]
+    for n in state.get("nodes", []):
+        if n["id"] == nid:
+            return n
+    raise KeyError(nid)
+
+
+def server_name(state, nid):
+    if nid == LOCAL:
+        return state["server"].get("name") or "Основной"
+    return server_by_id(state, nid)["name"]
+
+
 def obfs_lines(srv, client=False):
     out = []
     for k in params_for(srv["proto"]):
@@ -181,8 +214,9 @@ def obfs_lines(srv, client=False):
     return out
 
 
-def server_conf(state):
-    s = state["server"]
+def server_conf(state, nid=LOCAL):
+    """Конфиг сервера nid (этот или дополнительный) с его клиентами."""
+    s = server_by_id(state, nid)
     sub, wan, ifc = s["subnet"], s["wan"], s["iface"]
     # Правила FORWARD вставляются в начало цепочки (-I): Docker ставит политику DROP
     # и держит свои цепочки сверху, правила в конце могут не сработать.
@@ -202,7 +236,7 @@ def server_conf(state):
         + "; ".join("iptables " + " ".join(r) for r in mss_rules(ifc, "-D")),
     ]
     for c in state["clients"]:
-        if not c["enabled"]:
+        if not c["enabled"] or node_id(c) != nid:
             continue
         lines += ["", f"# {c['name']}", "[Peer]",
                   f"PublicKey = {c['public_key']}",
@@ -236,7 +270,7 @@ def apply_live_net(state):
 
 def client_endpoint(state, c):
     """Адрес, к которому подключается клиент: напрямую или через входной сервер каскада."""
-    s = state["server"]
+    s = node_of(state, c)
     if c.get("via") == "cascade" and s.get("cascade"):
         return s["cascade"]
     return f"{s['endpoint']}:{s['port']}"
@@ -261,7 +295,7 @@ def remember_issued(state):
 
 
 def client_conf(state, c):
-    s = state["server"]
+    s = node_of(state, c)
     lines = [
         "[Interface]",
         f"PrivateKey = {c['private_key']}",
@@ -309,6 +343,7 @@ def apply(state, restart=False):
         ifc = state["server"]["iface"]
         if restart or not iface_up(state):
             run(["systemctl", "restart", SERVICE.format(iface=ifc)])
+            push_nodes(state)
             return
         stripped = run(["awg-quick", "strip", conf_path(state)])
         with tempfile.NamedTemporaryFile("w", delete=False) as f:
@@ -319,11 +354,23 @@ def apply(state, restart=False):
         finally:
             os.unlink(tmp)
         apply_live_net(state)
+        push_nodes(state)
 
 
-def next_ip(state):
-    net = ipaddress.ip_network(state["server"]["subnet"])
-    used = {state["server"]["address"].split("/")[0]} | {c["ip"] for c in state["clients"]}
+def push_nodes(state):
+    if state.get("nodes"):
+        import nodes
+        nodes.push_all(state, log=_log)
+
+
+def _log(msg):
+    print(msg, file=sys.stderr, flush=True)
+
+
+def next_ip(state, nid=LOCAL):
+    srv = server_by_id(state, nid)
+    net = ipaddress.ip_network(srv["subnet"])
+    used = {srv["address"].split("/")[0]} | {c["ip"] for c in state["clients"] if node_id(c) == nid}
     for h in net.hosts():
         if str(h) not in used:
             return str(h)
@@ -331,9 +378,10 @@ def next_ip(state):
 
 
 def add_client(name, expires=None, limit_bytes=None, limit_period="total", via="direct",
-               trial=False, note=""):
+               trial=False, note="", node=LOCAL):
     with _lock:
         state = load()
+        server_by_id(state, node)            # KeyError, если такого сервера нет
         priv, pub = genkey()
         c = {
             "id": uuid.uuid4().hex[:12],
@@ -341,7 +389,8 @@ def add_client(name, expires=None, limit_bytes=None, limit_period="total", via="
             "private_key": priv,
             "public_key": pub,
             "psk": genpsk(),
-            "ip": next_ip(state),
+            "ip": next_ip(state, node),
+            "node": node,
             "enabled": True,
             "created": int(time.time()),
             "expires": expires,
@@ -391,9 +440,12 @@ def _account(state, live, events=None):
     now = time.time()
     period = _period()
     changed = False
+    down = getattr(live, "down", ())
     for c in state["clients"]:
         u = c.setdefault("usage", {"rx": 0, "tx": 0})
-        if live is not None:
+        # Сервер клиента недоступен — счётчики неизвестны, last не сбрасываем,
+        # иначе после восстановления связи трафик посчитался бы второй раз.
+        if live is not None and node_id(c) not in down:
             st = live.get(c["public_key"])
             last = c.get("last", {"rx": 0, "tx": 0})
             if st:
@@ -425,16 +477,26 @@ def _account(state, live, events=None):
 
 def check():
     """Периодическая проверка: учёт трафика, сроки, лимиты.
-    Возвращает (события автоотключения, работает ли туннель)."""
+    Возвращает (события автоотключения, серверы без ответа)."""
+    # Опрос серверов — до блокировки: недоступный сервер не должен задерживать панель.
+    live = status(load(), max_age=1)
     with _lock:
         state = load()
-        live = status(state)
         events = []
         changed = _account(state, live, events)
         save(state)
         if changed:
             apply(state)
-        return events, live is not None
+        elif state.get("nodes"):
+            # Сервер был недоступен или панель перезапустилась — отправить ему конфиг.
+            import nodes
+            for n in state["nodes"]:
+                if not nodes.pushed(n["id"]):
+                    try:
+                        nodes.push(state, n)
+                    except Exception as e:  # noqa: BLE001
+                        _log(f"сервер {n['name']}: {e}")
+        return events, live.down
 
 
 def update_client(cid, **fields):
@@ -446,8 +508,14 @@ def update_client(cid, **fields):
             if c["id"] == cid:
                 if fields.pop("reset_usage", False):
                     c["usage"] = {"rx": 0, "tx": 0}
-                if "via" in fields:
+                if "via" in fields or "node" in fields:
                     c.setdefault("issued", client_endpoint(state, c))
+                new_node = fields.pop("node", None)
+                if new_node and new_node != node_id(c):
+                    server_by_id(state, new_node)
+                    c["ip"] = next_ip(state, new_node)
+                    c["node"] = new_node
+                    c["last"] = {"rx": 0, "tx": 0}     # на новом сервере счётчики с нуля
                 c.update(fields)
                 if "enabled" in fields:
                     c["disabled_reason"] = None if c["enabled"] else "manual"
@@ -530,17 +598,39 @@ def active_shares(state):
     return {v["cid"]: v["expires"] for v in state.get("shares", {}).values() if v["expires"] > now}
 
 
-def status(state):
-    """Вернуть {public_key: {...}} из вывода `awg show <iface> dump`."""
+class Live(dict):
+    """{public_key: {...}} по всем серверам; down — серверы, о которых данных нет."""
+    down = frozenset()
+
+
+def status(state, max_age=None):
+    """Пиры всех серверов из `awg show <iface> dump`."""
+    live = Live()
+    down = set()
     try:
         res = subprocess.run(["awg", "show", state["server"]["iface"], "dump"],
                              capture_output=True, text=True, timeout=CMD_TIMEOUT)
+        if res.returncode == 0:
+            live.update(parse_dump(res.stdout))
+        else:
+            down.add(LOCAL)
     except subprocess.TimeoutExpired:
-        return None
+        down.add(LOCAL)
+    if state.get("nodes"):
+        import nodes
+        for n in state["nodes"]:
+            peers = nodes.dump(n, **({"max_age": max_age} if max_age is not None else {}))
+            if peers is None:
+                down.add(n["id"])
+            else:
+                live.update(peers)
+    live.down = frozenset(down)
+    return live
+
+
+def parse_dump(out):
     peers = {}
-    if res.returncode != 0:
-        return None
-    for line in res.stdout.strip().splitlines()[1:]:
+    for line in out.strip().splitlines()[1:]:
         f = line.split("\t")
         if len(f) < 8:
             continue

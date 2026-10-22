@@ -272,3 +272,10 @@ input.otp { font-size: 22px; letter-spacing: .2em; text-align: center; }
 @media (max-width: 640px) { #twofa .two { grid-template-columns: 1fr; } #twofa .qr-box { max-width: 240px; } }
 #twofa .two { display: grid; gap: 20px; align-items: start; }
 .qr-box svg { display: block; width: 100%; height: auto; }
+
+table.servers { width: 100%; border-collapse: collapse; margin: 8px 0 12px; }
+table.servers td { padding: 6px 8px; border-top: 1px solid var(--line, rgb(127 127 127 / .2)); vertical-align: top; }
+details.node { margin-top: 10px; }
+details.node summary { cursor: pointer; padding: 4px 0; }
+pre.copyable { white-space: pre-wrap; word-break: break-all; font-size: 12px; user-select: all; }
+.srv-tag { font-size: 11px; padding: 0 6px; border-radius: 5px; background: rgb(127 127 127 / .14); }
