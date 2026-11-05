@@ -235,10 +235,10 @@ sudo bash cert.sh myvpn.duckdns.org            # можно добавить --e
 
 ```bash
 curl -fsSLO https://raw.githubusercontent.com/g79175929220-tech/amneziawg/claude/amnesiawg-web-panel-1kuz00/wireguard/wg-simple.sh
-sudo bash wg-simple.sh            # установка + первый конфиг, QR-код прямо в терминале
+sudo bash wg-simple.sh            # установка + первый конфиг (в конце — команда скачать его на ПК)
 sudo bash wg-simple.sh --add ИМЯ  # ещё конфиг (одно устройство — один конфиг)
 sudo bash wg-simple.sh --list     # конфиги, кто в сети
-sudo bash wg-simple.sh --show ИМЯ # показать конфиг и QR ещё раз; --remove ИМЯ — удалить
+sudo bash wg-simple.sh --show ИМЯ # показать конфиг ещё раз (--qr — и QR для телефона); --remove ИМЯ — удалить
 ```
 
 Уже настроенный WireGuard на сервере не трогается: скрипт берёт свой интерфейс, свободный порт и подсеть.

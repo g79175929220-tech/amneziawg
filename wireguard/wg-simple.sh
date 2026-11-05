@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
 # Обычный WireGuard — для официального приложения WireGuard (без обфускации AmneziaWG).
 #
-#   sudo bash wg-simple.sh                установить и создать первый конфиг (с QR-кодом)
+#   sudo bash wg-simple.sh                установить и создать первый конфиг
 #   sudo bash wg-simple.sh --add ИМЯ      ещё один конфиг (отдельное устройство)
-#   sudo bash wg-simple.sh --show [ИМЯ]   показать конфиг и QR-код ещё раз
+#   sudo bash wg-simple.sh --show [ИМЯ]   показать конфиг ещё раз (--qr — и QR-код для телефона)
 #   sudo bash wg-simple.sh --list         конфиги и когда подключались
 #   sudo bash wg-simple.sh --remove ИМЯ   удалить конфиг (устройство отключится)
 #
@@ -22,7 +22,7 @@ warn() { echo -e "\e[1;33m!!\e[0m $*"; }
 die() { echo -e "\e[1;31m!!\e[0m $*" >&2; exit 1; }
 [[ $EUID -eq 0 ]] || die "Запустите от имени root"
 
-ACTION=install; NAME=""; PORT=51820; USER_PORT=0; ENDPOINT=""; DNS="8.8.8.8, 8.8.4.4"; MTU=1280
+ACTION=install; NAME=""; QR=0; PORT=51820; USER_PORT=0; ENDPOINT=""; DNS="8.8.8.8, 8.8.4.4"; MTU=1280
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --add) ACTION=add; NAME="${2:-}"; shift; [[ -n "$NAME" ]] && shift ;;
@@ -30,6 +30,7 @@ while [[ $# -gt 0 ]]; do
     --list) ACTION=list; shift ;;
     --remove) ACTION=remove; NAME="${2:-}"; shift; [[ -n "$NAME" ]] && shift ;;
     --name) NAME="$2"; shift 2 ;;
+    --qr) QR=1; shift ;;
     --port) PORT="$2"; USER_PORT=1; shift 2 ;;
     --endpoint) ENDPOINT="$2"; shift 2 ;;
     --dns) DNS="$2"; shift 2 ;;
@@ -53,15 +54,19 @@ show_client() {
   echo "──────────── конфиг «$1» (файл: /root/$1.conf) ────────────"
   cat "$f"
   echo "──────────────────────────────────────────────────────────────"
-  if command -v qrencode >/dev/null; then
-    echo "QR-код — отсканируйте в приложении WireGuard (+ → «Сканировать QR-код»):"
+  if [[ $QR == 1 ]] && command -v qrencode >/dev/null; then
+    echo "QR-код — в приложении WireGuard на телефоне: «+» → «Сканировать QR-код»:"
     qrencode -t ansiutf8 -m 2 < "$f"
   fi
+  local host; host=$(curl -4 -fsS --max-time 5 https://api.ipify.org 2>/dev/null || echo "$ENDPOINT")
   cat <<EOF
-  Телефон:  приложение WireGuard → «+» → «Сканировать QR-код».
-  Компьютер: скачайте /root/$1.conf (WinSCP) и в WireGuard → «Импорт туннелей из файла»,
-            или «Добавить пустой туннель» и вставьте текст конфига выше целиком.
-  Один конфиг — одно устройство: для второго сделайте bash $0 --add ИМЯ
+
+  Скачать файл на компьютер — в PowerShell на ПК (файл появится на рабочем столе):
+      scp root@$host:/root/$1.conf "\$env:USERPROFILE\Desktop\\"
+  (вход по ключу — добавьте после scp: -i путь\к\ключу)
+  Затем в WireGuard для Windows: «Импорт туннелей из файла» → $1.conf.
+  Или «Добавить туннель» → «Добавить пустой туннель» и вставьте текст конфига выше целиком.
+  Один конфиг — одно устройство: для второго — bash $0 --add ИМЯ
 EOF
 }
 
