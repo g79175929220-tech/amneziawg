@@ -229,6 +229,22 @@ sudo bash cert.sh myvpn.duckdns.org            # можно добавить --e
 
 Если проблема остаётся, попробуйте уменьшить MTU до 1280 в настройках — у мобильных сетей он часто меньше.
 
+## Обычный WireGuard (для приложения WireGuard)
+
+Если нужен именно WireGuard без обфускации (официальное приложение WireGuard, роутер), без панели:
+
+```bash
+curl -fsSLO https://raw.githubusercontent.com/g79175929220-tech/amneziawg/claude/amnesiawg-web-panel-1kuz00/wireguard/wg-simple.sh
+sudo bash wg-simple.sh            # установка + первый конфиг, QR-код прямо в терминале
+sudo bash wg-simple.sh --add ИМЯ  # ещё конфиг (одно устройство — один конфиг)
+sudo bash wg-simple.sh --list     # конфиги, кто в сети
+sudo bash wg-simple.sh --show ИМЯ # показать конфиг и QR ещё раз; --remove ИМЯ — удалить
+```
+
+Уже настроенный WireGuard на сервере не трогается: скрипт берёт свой интерфейс, свободный порт и подсеть.
+Конфиг сохраняется в `/root/ИМЯ.conf`. Учтите: обычный WireGuard в России операторы распознают и могут
+блокировать — для мобильного интернета надёжнее AmneziaWG.
+
 ## Файлы на сервере
 
 | Путь | Назначение |
