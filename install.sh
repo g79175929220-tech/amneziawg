@@ -26,6 +26,7 @@ IFACE=""
 SUBNET=""
 RESTORE=""
 NODE_KEY=""
+BUILD_ONLY=0
 USER_PORT=0
 SRC_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
@@ -39,6 +40,7 @@ while [[ $# -gt 0 ]]; do
     --subnet) SUBNET="$2"; shift 2 ;;
     --restore) RESTORE="$(realpath "$2")"; shift 2 ;;
     --node) NODE_KEY="$2"; shift 2 ;;
+    --build-only) BUILD_ONLY=1; shift ;;   # только AmneziaWG 3.1 и юнит awg3-quick@ (для wg-simple.sh --awg)
     *) echo "Неизвестный параметр: $1"; exit 1 ;;
   esac
 done
@@ -152,6 +154,10 @@ ExecStop=$PREFIX/bin/awg-quick down $CONF_DIR/%i.conf
 WantedBy=multi-user.target
 UNIT
 systemctl daemon-reload
+if [[ $BUILD_ONLY == 1 ]]; then
+  log "AmneziaWG 3.1 установлен в $PREFIX, юнит awg3-quick@"
+  exit 0
+fi
 
 # ---------------------------------------------------- соседство с другими туннелями
 # Порт занят, если его слушает процесс или его публикует Docker (контейнеры Amnezia):
