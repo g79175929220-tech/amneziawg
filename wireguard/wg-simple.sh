@@ -307,6 +307,21 @@ add_peer "$NAME"
 if command -v ufw >/dev/null && ufw status | grep -q active; then
   ufw allow "$PORT/udp" >/dev/null && log "ufw: открыт $PORT/udp"
 fi
+# firewalld (есть в шаблонах FirstVDS): иначе порт закрыт, а если открыт — рукопожатие проходит,
+# но пакеты клиентов не выходят в интернет. Касается только своего интерфейса и порта.
+if command -v firewall-cmd >/dev/null && firewall-cmd --state >/dev/null 2>&1; then
+  WAN_ZONE=$(firewall-cmd --get-zone-of-interface="$WAN" 2>/dev/null) || WAN_ZONE=$(firewall-cmd --get-default-zone)
+  fw_ok=1
+  for p in "" --permanent; do
+    firewall-cmd $p --zone=trusted --add-interface="$IFACE" >/dev/null 2>&1 || fw_ok=0
+    firewall-cmd $p --zone="$WAN_ZONE" --add-port="$PORT/udp" >/dev/null 2>&1 || fw_ok=0
+  done
+  if [[ $fw_ok == 1 ]]; then
+    log "firewalld: открыт $PORT/udp (зона $WAN_ZONE), интерфейс $IFACE — в зоне trusted"
+  else
+    warn "firewalld: не удалось настроить $IFACE и $PORT/udp — клиенты могут остаться без интернета"
+  fi
+fi
 echo
 log "Готово! $LABEL: $IFACE, $ENDPOINT:$PORT/udp — откройте этот UDP-порт в файрволе хостинга, если он есть."
 show_client "$NAME"
