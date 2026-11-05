@@ -68,11 +68,22 @@ install_go() {
     export PATH=/usr/local/go/bin:$PATH; return
   fi
   log "Установка Go (нужен для сборки amneziawg-go)"
-  local arch gover
+  local arch gover base ok=0
   arch=$(dpkg --print-architecture)
-  gover=$(curl -fsSL "https://go.dev/VERSION?m=text" | head -1)
+  # Сайты Google (go.dev, dl.google.com) из части российских сетей не открываются —
+  # поэтому таймауты и зеркала: golang.google.cn, mirrors.aliyun.com.
+  gover=$(curl -fsSL --connect-timeout 10 --max-time 20 "https://go.dev/VERSION?m=text" 2>/dev/null | head -1 \
+       || curl -fsSL --connect-timeout 10 --max-time 20 "https://golang.google.cn/VERSION?m=text" 2>/dev/null | head -1 || true)
+  [[ "$gover" =~ ^go1\.[0-9]+(\.[0-9]+)?$ ]] || gover=go1.25.0
+  for base in https://go.dev/dl https://golang.google.cn/dl https://mirrors.aliyun.com/golang; do
+    log "Скачиваю $gover с ${base%%/dl}"
+    if curl -fL --connect-timeout 10 --speed-limit 51200 --speed-time 20 -o /tmp/go.tgz "$base/${gover}.linux-${arch}.tar.gz" 2>/dev/null \
+       && tar -tzf /tmp/go.tgz >/dev/null 2>&1; then ok=1; break; fi
+    warn "Не получилось, пробую другое зеркало"
+  done
+  [[ $ok == 1 ]] || { echo "Не удалось скачать Go ни с одного зеркала — проверьте доступ сервера в интернет"; exit 1; }
   rm -rf /usr/local/go
-  curl -fsSL "https://go.dev/dl/${gover}.linux-${arch}.tar.gz" | tar -C /usr/local -xz
+  tar -C /usr/local -xzf /tmp/go.tgz; rm -f /tmp/go.tgz
   export PATH=/usr/local/go/bin:$PATH
 }
 
@@ -100,6 +111,7 @@ build_awg3() {
   add_build_swap
   trap remove_build_swap EXIT
   install_go
+  export GOPROXY="https://proxy.golang.org|https://goproxy.cn|https://goproxy.io|direct" GOSUMDB=sum.golang.org
   log "Сборка amneziawg-go $AWG_GO_TAG"
   git clone -q --depth 1 -b "$AWG_GO_TAG" https://github.com/amnezia-vpn/amneziawg-go "$build/go"
   make -C "$build/go" >/dev/null
