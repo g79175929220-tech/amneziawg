@@ -92,6 +92,19 @@ def csrf_token():
 app.jinja_env.globals["csrf_token"] = csrf_token
 
 
+def static_url(name):
+    """Ссылка на static с версией файла: после обновления панели браузер возьмёт новый
+    app.js/style.css, а не старый из кэша (иначе новые кнопки не работают до Ctrl+F5)."""
+    try:
+        v = int(os.path.getmtime(os.path.join(app.static_folder, name)))
+    except OSError:
+        v = 0
+    return url_for("static", filename=name, v=v)
+
+
+app.jinja_env.globals["static_url"] = static_url
+
+
 @app.before_request
 def guard():
     if request.endpoint in ("login", "login_2fa", "static", "share_page", "share_redeem"):
