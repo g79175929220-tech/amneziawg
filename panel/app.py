@@ -7,6 +7,7 @@ import json
 import os
 import re
 import secrets
+import subprocess
 import sys
 import time
 
@@ -21,6 +22,7 @@ import awg
 import jobs
 import nodes
 import totp
+import xray
 
 PANEL_FILE = os.path.join(awg.STATE_DIR, "panel.json")
 
@@ -269,7 +271,8 @@ def api_clients():
         })
     return {"up": awg.LOCAL not in live.down, "now": int(now), "clients": out,
             "cascade": state["server"].get("cascade") or None,
-            "servers": servers_info(state, live)}
+            "servers": servers_info(state, live),
+            "xray": xray.link_address(state) if xray.enabled(state) else None}
 
 
 def servers_info(state, live=None):
@@ -390,12 +393,18 @@ def share_redeem(token):
     state, c = res
     awg.mark_issued(c["id"])
     conf = awg.client_conf(state, c)
-    img = qrcode.make(conf, image_factory=qrcode.image.svg.SvgPathImage, box_size=10, border=2)
+    fname = file_name(config_name(c))
+    xlink = xray.link(state, c) if xray.enabled(state) and c.get("xray_id") else None
+    return _share_headers(app.make_response(render_template(
+        "share.html", c=c, token=token, conf=conf, qr=qr_svg(conf), fname=fname,
+        xlink=xlink, xqr=qr_svg(xlink) if xlink else None)))
+
+
+def qr_svg(text, box=10):
+    img = qrcode.make(text, image_factory=qrcode.image.svg.SvgPathImage, box_size=box, border=2)
     buf = io.BytesIO()
     img.save(buf)
-    fname = file_name(config_name(c))
-    return _share_headers(app.make_response(render_template(
-        "share.html", c=c, token=token, conf=conf, qr=buf.getvalue().decode(), fname=fname)))
+    return buf.getvalue().decode()
 
 
 @app.delete("/api/clients/<cid>")
@@ -415,6 +424,26 @@ def api_qr(cid):
     img.save(buf)
     return Response(buf.getvalue(), mimetype="image/svg+xml",
                     headers={"Cache-Control": "no-store"})
+
+
+def _xray_link(cid):
+    state, c = _get_client(cid)
+    if not xray.enabled(state):
+        abort(409, "XRay не включён — Настройки → XRay")
+    if not c.get("xray_id"):
+        abort(409, "У клиента ещё нет ключа XRay — обновите страницу через несколько секунд")
+    return xray.link(state, c)
+
+
+@app.get("/api/clients/<cid>/xray.svg")
+def api_xray_qr(cid):
+    return Response(qr_svg(_xray_link(cid)), mimetype="image/svg+xml",
+                    headers={"Cache-Control": "no-store"})
+
+
+@app.get("/api/clients/<cid>/xray")
+def api_xray_link(cid):
+    return Response(_xray_link(cid), mimetype="text/plain", headers={"Cache-Control": "no-store"})
 
 
 @app.get("/api/clients/<cid>/config")
@@ -622,6 +651,8 @@ def _settings():
                 n = awg.server_by_id(state, request.form["id"])
                 nodes.push(state, n, force=True)
                 flash(f"Конфиг отправлен на «{n['name']}»", "ok")
+            elif action == "xray":
+                _settings_xray(state)
             elif action == "restart":
                 awg.apply(state, restart=True)
                 flash("Интерфейс перезапущен", "ok")
@@ -689,10 +720,55 @@ def _settings():
                            notify=n, token_masked=masked, tfa=tfa, backups=jobs.list_backups(),
                            backup_dir=jobs.BACKUP_DIR, endpoint_is_ip=_is_ip(s["endpoint"]),
                            servers=servers_info(state, awg.status(state)), node_list=state.get("nodes", []),
-                           node_key=nodes.public_key(), repo_branch=REPO_BRANCH)
+                           node_key=nodes.public_key(), repo_branch=REPO_BRANCH,
+                           x=xray.settings(state), x_installed=xray.installed(),
+                           x_active=xray.enabled(state) and subprocess.run(
+                               ["systemctl", "is-active", "-q", xray.SERVICE]).returncode == 0,
+                           x_users=len(xray.users(state)) if xray.enabled(state) else 0)
 
 
 REPO_BRANCH = "claude/amnesiawg-web-panel-1kuz00"
+
+
+def _settings_xray(state):
+    """XRay (VLESS + Reality): включение, порт, сайт для маскировки, адрес в ссылках."""
+    x = state.setdefault("xray", {})
+    on = request.form.get("enabled") == "on"
+    port = int(request.form.get("port") or 443)
+    if not 1 <= port <= 65535:
+        raise ValueError("Неверный порт")
+    sni = request.form.get("sni", "").strip().lower() or xray.DEFAULT_SNI
+    if not re.fullmatch(r"[a-z0-9-]+(\.[a-z0-9-]+)+", sni):
+        raise ValueError("Сайт для маскировки укажите доменом, например www.apple.com")
+    link = request.form.get("link", "").strip()
+    if link and not re.fullmatch(r"[A-Za-z0-9.-]+:\d{1,5}", link):
+        raise ValueError("Адрес для ссылок укажите как домен:порт, например 1xcvet.ru:8443")
+    if on:
+        if not xray.installed():
+            raise ValueError("XRay не установлен. На сервере: cd ~/amneziawg && git pull && bash install.sh")
+        if xray.port_busy(port):
+            raise ValueError(f"TCP-порт {port} на этом сервере занят другой программой — выберите другой")
+        xray.ensure_keys(x)
+    x.update(enabled=on, port=port, sni=sni, link=link)
+    if on:
+        xray.ensure_ids(state)
+    awg.save(state)
+    awg.sync_xray(state)
+    if on and xray.installed():
+        if subprocess.run(["systemctl", "is-active", "-q", xray.SERVICE]).returncode != 0:
+            raise ValueError("XRay не запустился: journalctl -u xray -n 30")
+        _ufw_allow(f"{port}/tcp")
+        flash(f"XRay работает на TCP {port}. Ссылки клиентов — в окне QR-кода, вкладка «XRay»", "ok")
+    else:
+        flash("XRay выключен", "ok")
+
+
+def _ufw_allow(rule):
+    try:
+        if "Status: active" in subprocess.run(["ufw", "status"], capture_output=True, text=True).stdout:
+            subprocess.run(["ufw", "allow", rule], capture_output=True)
+    except FileNotFoundError:
+        pass
 
 
 def _is_ip(host):

@@ -309,6 +309,36 @@ python3 -m venv /opt/awg-panel/venv
 /opt/awg-panel/venv/bin/pip install -q --upgrade pip
 /opt/awg-panel/venv/bin/pip install -q -r /opt/awg-panel/requirements.txt
 
+# XRay (VLESS + Reality) — включается в панели (Настройки → XRay) для мобильных сетей, где
+# режут UDP. Здесь только программа и юнит; не скачался — панель работает без XRay.
+install_xray() {
+  if [[ ! -x /usr/local/bin/xray ]]; then
+    log "Загрузка XRay"
+    local t u want got; t=$(mktemp -d)
+    case "$(uname -m)" in aarch64|arm64) u=Xray-linux-arm64-v8a.zip ;; *) u=Xray-linux-64.zip ;; esac
+    u=https://github.com/XTLS/Xray-core/releases/latest/download/$u
+    if curl -fsSL --connect-timeout 10 --max-time 180 --retry 2 -o "$t/x.zip" "$u" \
+       && curl -fsSL --connect-timeout 10 --max-time 30 -o "$t/x.dgst" "$u.dgst"; then
+      want=$(awk -F'= ' '/^SHA2-256/{print $2}' "$t/x.dgst"); got=$(sha256sum "$t/x.zip" | awk '{print $1}')
+      if [[ -n "$want" && "$want" == "$got" ]] \
+         && python3 -c "import zipfile,sys;zipfile.ZipFile(sys.argv[1]).extract('xray',sys.argv[2])" "$t/x.zip" "$t"; then
+        install -m 755 "$t/xray" /usr/local/bin/xray
+      else
+        warn "XRay: архив повреждён — пропускаю (панель работает без XRay)"
+      fi
+    else
+      warn "XRay: не удалось скачать с GitHub — пропускаю (панель работает без XRay)"
+    fi
+    rm -rf "$t"
+  fi
+  if [[ -x /usr/local/bin/xray ]]; then
+    install -d -m 750 -g nogroup /usr/local/etc/xray
+    install -m 0644 "$SRC_DIR/systemd/xray.service" /etc/systemd/system/xray.service
+    systemctl daemon-reload
+  fi
+}
+install_xray
+
 export PATH="$PREFIX/bin:$PATH" AWG_CONF_DIR="$CONF_DIR" AWG_SERVICE="awg3-quick@{iface}"
 PANEL_PY="/opt/awg-panel/venv/bin/python /opt/awg-panel/app.py"
 

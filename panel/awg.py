@@ -344,6 +344,7 @@ def apply(state, restart=False):
         if restart or not iface_up(state):
             run(["systemctl", "restart", SERVICE.format(iface=ifc)])
             push_nodes(state)
+            sync_xray(state)
             return
         stripped = run(["awg-quick", "strip", conf_path(state)])
         with tempfile.NamedTemporaryFile("w", delete=False) as f:
@@ -355,6 +356,22 @@ def apply(state, restart=False):
             os.unlink(tmp)
         apply_live_net(state)
         push_nodes(state)
+        sync_xray(state)
+
+
+def sync_xray(state):
+    """XRay (VLESS) — те же клиенты; его сбой не должен мешать AmneziaWG."""
+    import xray
+    if not xray.settings(state).get("enabled"):
+        if xray.installed():
+            xray.sync(state, log=_log)          # остановить, если работал
+        return
+    try:
+        if xray.ensure_ids(state):
+            save(state)
+        xray.sync(state, log=_log)
+    except Exception as e:  # noqa: BLE001
+        _log(f"XRay: {e}")
 
 
 def push_nodes(state):
@@ -389,6 +406,7 @@ def add_client(name, expires=None, limit_bytes=None, limit_period="total", via="
             "private_key": priv,
             "public_key": pub,
             "psk": genpsk(),
+            "xray_id": str(uuid.uuid4()),   # VLESS (XRay) — для сетей, где режут UDP
             "ip": next_ip(state, node),
             "node": node,
             "enabled": True,
@@ -421,11 +439,16 @@ def _delta(cur, last):
 def live_usage(c, live):
     """Накопленный трафик клиента с учётом ещё не сохранённого прироста."""
     u = c.get("usage", {"rx": 0, "tx": 0})
-    last = c.get("last", {"rx": 0, "tx": 0})
-    st = (live or {}).get(c["public_key"])
-    if not st:
-        return u["rx"], u["tx"]
-    return u["rx"] + _delta(st["rx"], last["rx"]), u["tx"] + _delta(st["tx"], last["tx"])
+    rx, tx = u["rx"], u["tx"]
+    st =(live or {}).get(c["public_key"])
+    if st:
+        last = c.get("last", {"rx": 0, "tx": 0})
+        rx, tx = rx + _delta(st["rx"], last["rx"]), tx + _delta(st["tx"], last["tx"])
+    xs = (getattr(live, "xray", None) or {}).get(c["id"])
+    if xs:
+        last = c.get("xlast", {"rx": 0, "tx": 0})
+        rx, tx = rx + _delta(xs["rx"], last["rx"]), tx + _delta(xs["tx"], last["tx"])
+    return rx, tx
 
 
 def over_limit(c):
@@ -463,6 +486,24 @@ def _account(state, live, events=None):
                 c["last"] = {"rx": 0, "tx": 0}
             if nid in ts:
                 c["last_ts"] = ts[nid]
+        # XRay работает на этом сервере, его счётчики — по id клиента (с запуска XRay).
+        # Как и выше: данные старее уже учтённых пропускаем, иначе меньшее значение счётчика
+        # выглядело бы как его сброс и трафик посчитался бы дважды.
+        xs = getattr(live, "xray", None) if live is not None else None
+        xts = getattr(live, "xray_ts", 0)
+        if xs is not None and c.get("xray_id") and xts >= c.get("xlast_ts", 0):
+            c["xlast_ts"] = xts
+            st = xs.get(c["id"])
+            last = c.get("xlast", {"rx": 0, "tx": 0})
+            if st:
+                drx, dtx = _delta(st["rx"], last["rx"]), _delta(st["tx"], last["tx"])
+                u["rx"] += drx
+                u["tx"] += dtx
+                c["xlast"] = {"rx": st["rx"], "tx": st["tx"]}
+                if drx or dtx:
+                    add_traffic(state, c, period, drx, dtx, nid=LOCAL)
+            elif last != {"rx": 0, "tx": 0}:
+                c["xlast"] = {"rx": 0, "tx": 0}
         # Месячный лимит: в новом месяце счётчик обнуляется.
         if c.get("limit_period") == "month" and c.get("period") != period:
             if c.get("period"):
@@ -491,14 +532,14 @@ def _account(state, live, events=None):
 KEEP_MONTHS = 24
 
 
-def add_traffic(state, c, period, drx, dtx):
+def add_traffic(state, c, period, drx, dtx, nid=None):
     m = c.setdefault("monthly", {})
     cur = m.setdefault(period, [0, 0])
     cur[0] += drx
     cur[1] += dtx
     for k in sorted(m)[:-KEEP_MONTHS]:
         del m[k]
-    t = _traffic_cell(state, period, node_id(c))
+    t = _traffic_cell(state, period, nid or node_id(c))
     t["rx"] += drx
     t["tx"] += dtx
 
@@ -672,6 +713,8 @@ class Live(dict):
     down = frozenset()
     ts = {}
     ifstat = {}
+    xray = None         # {id клиента: {"rx", "tx"}} — счётчики XRay; None — не работает/выключен
+    xray_ts = 0
 
 
 def status(state, max_age=None):
@@ -705,6 +748,9 @@ def status(state, max_age=None):
                 ifs = nodes.ifstat(n["id"])
                 if ifs:
                     live.ifstat[n["id"]] = ifs
+    import xray
+    if xray.enabled(state):
+        live.xray, live.xray_ts = xray.stats(), time.time()
     live.down = frozenset(down)
     return live
 

@@ -26,7 +26,23 @@
     <button class="btn primary" id="download">Скачать {{ fname }}.vpn</button>
   </div>
   <details><summary>Показать текст конфигурации</summary><pre id="conf">{{ conf }}</pre></details>
+  {% if xlink %}
+  <h2>Для мобильного интернета (XRay)</h2>
+  <p class="muted small">Если через мобильный интернет AmneziaWG бесконечно подключается — добавьте
+     и это подключение: в AmneziaVPN «+» → отсканируйте QR-код или вставьте ссылку
+     (подойдут и приложения v2RayTun, Hiddify).</p>
+  <div class="qr-box">{{ xqr|safe }}</div>
+  <div class="modal-actions">
+    <button class="btn" id="xcopy">Копировать ссылку XRay</button>
+  </div>
+  <pre id="xlink" hidden>{{ xlink }}</pre>
+  {% endif %}
   <script>
+    const xl = document.getElementById("xlink");
+    if (xl) document.getElementById("xcopy").addEventListener("click", async (e) => {
+      try { await navigator.clipboard.writeText(xl.textContent); e.target.textContent = "Скопировано"; }
+      catch { xl.hidden = false; e.target.textContent = "Скопируйте ссылку ниже"; }
+    });
     const conf = document.getElementById("conf").textContent;
     document.getElementById("download").addEventListener("click", () => {
       const a = document.createElement("a");

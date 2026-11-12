@@ -11,9 +11,10 @@
 | `install.sh` | AmneziaWG 3.1 (сборка из исходников в `/opt/awg3`, юнит `awg3-quick@`) + панель в `/opt/awg-panel`. Режимы: `--restore копия.tar.gz`, `--node "ssh-ed25519 …"` (доп. сервер без панели), `--build-only` |
 | `panel/` | Flask + gunicorn (1 воркер, `gunicorn_conf.py`), состояние — `/etc/awg-panel/state.json` под `awg._lock` (RLock + flock) |
 | `panel/awg.py` | клиенты, конфиги, учёт трафика (накопительный, по месяцам), `Live`/`status()` по всем серверам |
+| `panel/xray.py` | XRay VLESS+Reality на сервере панели (для мобильных сетей, где режут UDP): `state["xray"]`, `c["xray_id"]`, пользователи на лету через API (`adu`/`rmu`), учёт трафика по `statsquery`; в ссылках `fp=safari` (приветствие Chrome не влезает в один пакет и теряется) |
 | `panel/nodes.py` | доп. серверы по SSH (ключ `/etc/awg-panel/node_ed25519`, ControlMaster), агент `node/awg-node` (info/dump/apply) |
 | `panel/jobs.py` | только stdlib: резервные копии, `import` клиентов с другого сервера, Telegram, ночные задачи |
-| `cascade/entry.sh` | входной сервер каскада (DNAT, несколько маршрутов, выход доменом с авто-обновлением IP) |
+| `cascade/entry.sh` | входной сервер каскада (DNAT UDP или `--tcp`, несколько маршрутов, выход доменом с авто-обновлением IP) |
 | `wireguard/wg-simple.sh` | обычный WireGuard без панели; `--awg` — AmneziaWG без панели |
 | `cert.sh`, `secure-ssh.sh`, `migrate-from.sh` | Let's Encrypt, защита SSH, перенос клиентов |
 

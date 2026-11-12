@@ -30,6 +30,33 @@
      Маршрут выбирается у каждого клиента в окне QR-кода.</p>
 </div>
 
+<div class="card" id="xray">
+  <h2>XRay (VLESS + Reality) {% if x_active %}<span class="chip ok">работает · клиентов {{ x_users }}</span>
+    {% elif x.get('enabled') %}<span class="chip bad">не работает</span>{% endif %}</h2>
+  <p class="muted small">Для мобильного интернета, где оператор режет UDP и AmneziaWG бесконечно
+     подключается. XRay идёт по TCP и для оператора выглядит как заход на обычный сайт. Клиенты те же:
+     срок, лимит и отключение действуют и на XRay. Ссылка клиента — в окне QR-кода, вкладка «XRay»;
+     её понимают AmneziaVPN, v2RayTun, Hiddify.</p>
+  {% if not x_installed %}
+  <p class="hint">XRay на сервере не установлен. Обновите панель: <code>cd ~/amneziawg &amp;&amp; git pull &amp;&amp; bash install.sh</code></p>
+  {% endif %}
+  <form method="post" class="form-grid">
+    <input type="hidden" name="csrf" value="{{ csrf_token() }}">
+    <input type="hidden" name="action" value="xray">
+    <label class="check"><span><input type="checkbox" name="enabled" {% if x.get('enabled') %}checked{% endif %}
+      {% if not x_installed %}disabled{% endif %}> Включить XRay</span></label>
+    <label>TCP-порт на этом сервере <input name="port" type="number" min="1" max="65535" value="{{ x.get('port', 443) }}"></label>
+    <label>Сайт для маскировки <input name="sni" value="{{ x.get('sni', 'www.apple.com') }}" placeholder="www.apple.com"></label>
+    <label>Адрес в ссылках (вход каскада, домен:порт)
+      <input name="link" value="{{ x.get('link', '') }}" placeholder="например 1xcvet.ru:8443 — пусто: {{ s.endpoint }}:{{ x.get('port', 443) }}"></label>
+    <div><button>Сохранить</button></div>
+  </form>
+  <p class="muted small">Из России лучше подключаться через российский входной сервер: на нём
+     <code>bash cascade/entry.sh --exit {{ s.endpoint }}:{{ x.get('port', 443) }} --port 8443 --tcp</code>,
+     а здесь в «Адрес в ссылках» — <code>домен_входного:8443</code>. Смена порта, сайта или адреса —
+     клиентам нужно заново отсканировать ссылку.</p>
+</div>
+
 <div class="card" id="servers">
   <h2>Серверы</h2>
   <p class="muted small">Одна панель — несколько серверов: у каждого клиента свой сервер (выбирается при

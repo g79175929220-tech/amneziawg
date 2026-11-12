@@ -11,6 +11,7 @@ const rows = new Map();      // id -> {el, prev, hist}
 let clients = [];
 let cascade = null;          // адрес входного сервера каскада, если настроен
 let servers = [];            // [{id, name, endpoint, cascade, up}] — этот и дополнительные
+let xrayAddr = null;         // адрес в ссылках XRay, если XRay включён
 let serverFilter = "";
 try { serverFilter = localStorage.getItem("server") || ""; } catch {}
 const srvOf = (c) => servers.find((s) => s.id === c.node) || servers[0] || {};
@@ -422,6 +423,7 @@ async function poll() {
     const data = await api("GET", "/api/clients");
     clients = data.clients;
     cascade = data.cascade;
+    xrayAddr = data.xray;
     syncServers(data);
     render(data);
   } catch (e) {
@@ -600,19 +602,45 @@ $("#qr-node").addEventListener("change", async (e) => {
     toast(`Клиент перенесён на «${srvOf(c).name}». Импортируйте этот конфиг на устройстве`);
   } catch (err) { toast(err.message, true); }
 });
+// Вкладки окна QR: AmneziaWG (конфиг) или XRay (vless-ссылка для мобильных сетей).
+let qrKind = "awg";
+function setKind(kind) {
+  qrKind = kind === "xray" && xrayAddr ? "xray" : "awg";
+  $("#qr-kind").hidden = !xrayAddr;
+  $("#qr-kind").querySelectorAll("button").forEach((b) =>
+    b.classList.toggle("active", b.dataset.kind === qrKind));
+  document.querySelectorAll("#dlg-qr .awg-only").forEach((e) => { e.hidden = qrKind !== "awg"; });
+  document.querySelectorAll("#dlg-qr .xray-only").forEach((e) => { e.hidden = qrKind !== "xray"; });
+  $("#qr-copy").textContent = qrKind === "xray" ? "Копировать ссылку" : "Копировать конфиг";
+  if (qrKind === "xray") {
+    $("#qr-endpoint").textContent = `XRay: подключение через ${xrayAddr} (TCP)`;
+    $("#qr-img").src = `/api/clients/${qrId}/xray.svg?t=${Date.now()}`;
+  } else {
+    const c = clients.find((x) => x.id === qrId);
+    showRoute(c && c.via === "cascade" ? "cascade" : "direct");
+    $("#qr-img").src = `/api/clients/${qrId}/qr.svg?t=${Date.now()}`;
+  }
+  try { localStorage.setItem("qrKind", qrKind); } catch {}
+}
+$("#qr-kind").addEventListener("click", (e) => {
+  const k = e.target.dataset && e.target.dataset.kind;
+  if (k) setKind(k);
+});
 function openQR(id) {
   const c = clients.find((x) => x.id === id);
   qrId = id;
   $("#qr-title").textContent = c ? c.name : "";
-  showRoute(c && c.via === "cascade" ? "cascade" : "direct");
-  $("#qr-img").src = `/api/clients/${id}/qr.svg?t=${Date.now()}`;
   $("#qr-download").href = `/clients/${id}/download`;
   $("#qr-download-conf").href = `/clients/${id}/download?format=conf`;
+  let kind = "awg"; try { kind = localStorage.getItem("qrKind") || "awg"; } catch {}
+  setKind(kind);
   $("#dlg-qr").showModal();
 }
 $("#qr-copy").addEventListener("click", async () => {
-  try { copy(await api("GET", `/api/clients/${qrId}/config`), "Конфигурация скопирована"); }
-  catch (e) { toast(e.message, true); }
+  try {
+    if (qrKind === "xray") copy(await api("GET", `/api/clients/${qrId}/xray`), "Ссылка XRay скопирована");
+    else copy(await api("GET", `/api/clients/${qrId}/config`), "Конфигурация скопирована");
+  } catch (e) { toast(e.message, true); }
 });
 
 function updateFname(f) {
