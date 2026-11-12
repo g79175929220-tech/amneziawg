@@ -363,8 +363,9 @@ def sync_xray(state):
     """XRay (VLESS) — те же клиенты; его сбой не должен мешать AmneziaWG."""
     import xray
     if not xray.settings(state).get("enabled"):
-        if xray.installed():
-            xray.sync(state, log=_log)          # остановить, если работал
+        # Остановить, только если XRay включали в панели: чужой XRay на сервере не трогаем.
+        if xray.settings(state) and xray.installed():
+            xray.sync(state, log=_log)
         return
     try:
         if xray.ensure_ids(state):

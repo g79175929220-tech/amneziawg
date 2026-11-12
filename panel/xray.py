@@ -215,13 +215,22 @@ def sync(state, log=print):
     if cur == new and _active():
         return
 
-    def without_users(cfg):
-        cfg = json.loads(json.dumps(cfg))
-        cfg["inbounds"][0]["settings"]["clients"] = []
-        return cfg
+    def same_but_users(a, b):
+        """Отличаются только пользователи — тогда хватит API, без перезапуска."""
+        try:
+            a, b = json.loads(json.dumps(a)), json.loads(json.dumps(b))
+            a["inbounds"][0]["settings"]["clients"] = b["inbounds"][0]["settings"]["clients"] = []
+            return a == b
+        except (KeyError, IndexError, TypeError):      # чужой конфиг другого вида
+            return False
 
+    if cur and cur.get("api", {}).get("listen") != API and not os.path.exists(CFG + ".before-panel"):
+        # Конфиг XRay, поставленного не панелью, — сохранить перед заменой.
+        with open(CFG) as src, open(CFG + ".before-panel", "w") as dst:
+            dst.write(src.read())
+        os.chmod(CFG + ".before-panel", 0o600)
     _write(new)
-    if cur and _active() and without_users(cur) == without_users(new):
+    if cur and _active() and same_but_users(cur, new):
         try:
             _live_update(cur["inbounds"][0]["settings"]["clients"], users(state), x)
             return

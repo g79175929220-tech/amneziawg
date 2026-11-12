@@ -332,9 +332,13 @@ install_xray() {
     rm -rf "$t"
   fi
   if [[ -x /usr/local/bin/xray ]]; then
-    install -d -m 750 -g nogroup /usr/local/etc/xray
-    install -m 0644 "$SRC_DIR/systemd/xray.service" /etc/systemd/system/xray.service
-    systemctl daemon-reload
+    [[ -d /usr/local/etc/xray ]] || install -d -m 750 -g nogroup /usr/local/etc/xray
+    # Юнит XRay, поставленного не панелью (свой конфиг, свои пользователи), не перезаписываем.
+    local unit=/etc/systemd/system/xray.service
+    if [[ ! -f $unit ]] || grep -q "awg-panel" $unit; then
+      install -m 0644 "$SRC_DIR/systemd/xray.service" $unit
+      systemctl daemon-reload
+    fi
   fi
 }
 install_xray
