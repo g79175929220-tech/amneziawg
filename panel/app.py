@@ -431,8 +431,8 @@ def api_delete(cid):
 
 @app.get("/api/clients/<cid>/qr.svg")
 def api_qr(cid):
+    # Выдача засчитывается кнопкой «Готово» в окне QR (POST …/issued), а не показом.
     state, c = _get_client(cid)
-    awg.mark_issued(cid)
     img = qrcode.make(awg.client_conf(state, c), image_factory=qrcode.image.svg.SvgPathImage,
                       box_size=10, border=2)
     buf = io.BytesIO()
@@ -447,8 +447,21 @@ def _xray_link(cid):
         abort(409, "XRay не включён — Настройки → XRay")
     if not c.get("xray_id"):
         abort(409, "У клиента ещё нет ключа XRay — обновите страницу через несколько секунд")
-    awg.mark_issued(cid, kind="xray")
     return xray.link(state, c)
+
+
+@app.post("/api/clients/<cid>/issued")
+def api_issued(cid):
+    """Кнопка «Готово» в окне QR: конфиг (kind=awg) или ссылка XRay (kind=xray) выданы
+    клиенту — пометка «старый конфиг» снимается."""
+    _get_client(cid)
+    kind = (request.get_json(silent=True) or {}).get("kind")
+    if kind not in ("awg", "xray"):
+        abort(400, "kind: awg или xray")
+    if kind == "xray":
+        _xray_link(cid)                       # 409, если XRay выключен
+    awg.mark_issued(cid, kind=kind)
+    return {"ok": True}
 
 
 @app.get("/api/clients/<cid>/xray.svg")
@@ -465,7 +478,6 @@ def api_xray_link(cid):
 @app.get("/api/clients/<cid>/config")
 def api_config(cid):
     state, c = _get_client(cid)
-    awg.mark_issued(cid)
     return Response(awg.client_conf(state, c), mimetype="text/plain",
                     headers={"Cache-Control": "no-store"})
 
@@ -499,7 +511,10 @@ def download(cid):
     octet-stream, а не text/plain: иначе телефоны сохраняют файл как *.conf.txt."""
     state, c = _get_client(cid)
     ext = "conf" if request.args.get("format") == "conf" else "vpn"
-    awg.mark_issued(cid)
+    # Кнопка скачивания в строке клиента — выдача сразу (окна с «Готово» там нет);
+    # из окна QR (?nomark=1) — засчитает «Готово».
+    if not request.args.get("nomark"):
+        awg.mark_issued(cid)
     return Response(awg.client_conf(state, c), mimetype="application/octet-stream",
                     headers={"Content-Disposition":
                              f'attachment; filename="{file_name(config_name(c), short=ext == "conf")}.{ext}"',

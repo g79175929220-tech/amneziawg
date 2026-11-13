@@ -631,12 +631,22 @@ function openQR(id) {
   const c = clients.find((x) => x.id === id);
   qrId = id;
   $("#qr-title").textContent = c ? c.name : "";
-  $("#qr-download").href = `/clients/${id}/download`;
-  $("#qr-download-conf").href = `/clients/${id}/download?format=conf`;
+  // nomark: из окна выдачу засчитывает кнопка «Готово», а не скачивание
+  $("#qr-download").href = `/clients/${id}/download?nomark=1`;
+  $("#qr-download-conf").href = `/clients/${id}/download?format=conf&nomark=1`;
   let kind = "awg"; try { kind = localStorage.getItem("qrKind") || "awg"; } catch {}
   setKind(kind);
   $("#dlg-qr").showModal();
 }
+// «Готово» — конфиг (или ссылка XRay, если открыта эта вкладка) выдан: снять «старый конфиг».
+// Закрытие окна по Esc выдачей не считается.
+$("#qr-done").addEventListener("click", async () => {
+  $("#dlg-qr").close();
+  try {
+    await api("POST", `/api/clients/${qrId}/issued`, { kind: qrKind });
+    refresh();
+  } catch (e) { toast(e.message, true); }
+});
 $("#qr-copy").addEventListener("click", async () => {
   try {
     if (qrKind === "xray") copy(await api("GET", `/api/clients/${qrId}/xray`), "Ссылка XRay скопирована");
