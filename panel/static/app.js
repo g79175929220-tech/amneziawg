@@ -160,7 +160,8 @@ function buildRow(c) {
   const stale = document.createElement("span");
   stale.className = "badge-stale";
   stale.textContent = "старый конфиг";
-  stale.title = "На устройстве конфиг с прежним адресом сервера: выдайте его заново (QR, файл или ссылка)";
+  stale.title = "На устройстве конфиг с прежним адресом сервера: выдайте его заново " +
+    "(QR AmneziaWG или XRay, файл или ссылка)";
   title.append(name, trial, stale);
   const note = document.createElement("div");
   note.className = "note";

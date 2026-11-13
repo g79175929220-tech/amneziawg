@@ -280,7 +280,7 @@ def api_clients():
             "trial": bool(c.get("trial")), "note": c.get("note", ""),
             "config_name": c.get("config_name") or "", "file_name": file_name(config_name(c)),
             # конфиг на устройстве со старым адресом (сменили Endpoint, порт или маршрут)
-            "stale": bool(c.get("issued")) and c["issued"] != awg.client_endpoint(state, c),
+            "stale": awg.stale(state, c),
         })
     return {"up": awg.LOCAL not in live.down, "now": int(now), "clients": out,
             "cascade": state["server"].get("cascade") or None,
@@ -408,6 +408,8 @@ def share_redeem(token):
     conf = awg.client_conf(state, c)
     fname = file_name(config_name(c))
     xlink = xray.link(state, c) if xray.enabled(state) and c.get("xray_id") else None
+    if xlink:
+        awg.mark_issued(c["id"], kind="xray")       # получил оба — устаревшим не считается
     return _share_headers(app.make_response(render_template(
         "share.html", c=c, token=token, conf=conf, qr=qr_svg(conf), fname=fname,
         xlink=xlink, xqr=qr_svg(xlink) if xlink else None)))
@@ -445,6 +447,7 @@ def _xray_link(cid):
         abort(409, "XRay не включён — Настройки → XRay")
     if not c.get("xray_id"):
         abort(409, "У клиента ещё нет ключа XRay — обновите страницу через несколько секунд")
+    awg.mark_issued(cid, kind="xray")
     return xray.link(state, c)
 
 

@@ -137,6 +137,13 @@ def link_address(state):
     return x.get("link") or f"{state['server']['endpoint']}:{x.get('port', 443)}"
 
 
+def signature(state):
+    """Всё, что входит в ссылку, кроме UUID клиента: изменится — ссылки нужно выдать заново."""
+    x = settings(state)
+    return "|".join([link_address(state), x.get("sni") or DEFAULT_SNI,
+                     x.get("public_key", ""), x.get("short_id", "")])
+
+
 def link(state, c, title=None):
     """vless:// ссылка клиента — её понимают AmneziaVPN, v2RayTun, Hiddify, v2rayNG."""
     x = settings(state)

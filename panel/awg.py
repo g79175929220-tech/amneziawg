@@ -276,15 +276,32 @@ def client_endpoint(state, c):
     return f"{s['endpoint']}:{s['port']}"
 
 
-def mark_issued(cid):
+def mark_issued(cid, kind="awg"):
     """Запомнить, с каким адресом клиенту выдан конфиг (QR, файл, ссылка): если адрес потом
-    сменится, в списке будет видно, кому конфиг нужно выдать заново."""
+    сменится, в списке будет видно, кому конфиг нужно выдать заново.
+    kind="xray" — выдана ссылка XRay: клиент перешёл на неё, «старый конфиг» AmneziaWG
+    больше не показываем, пока не изменятся адрес/ключи XRay или не выдадут конфиг AmneziaWG."""
+    import xray
     with _lock:
         state = load()
         c = next((c for c in state["clients"] if c["id"] == cid), None)
-        if c and c.get("issued") != client_endpoint(state, c):
-            c["issued"] = client_endpoint(state, c)
+        if not c:
+            return
+        before = (c.get("issued"), c.get("xray_issued"), c.get("issued_last"))
+        if kind == "xray":
+            c["xray_issued"], c["issued_last"] = xray.signature(state), "xray"
+        else:
+            c["issued"], c["issued_last"] = client_endpoint(state, c), "awg"
+        if (c.get("issued"), c.get("xray_issued"), c.get("issued_last")) != before:
             save(state)
+
+
+def stale(state, c):
+    """Конфиг на устройстве устарел — его нужно выдать заново (по последнему выданному виду)."""
+    import xray
+    if c.get("issued_last") == "xray" and xray.enabled(state):
+        return c.get("xray_issued") != xray.signature(state)
+    return bool(c.get("issued")) and c["issued"] != client_endpoint(state, c)
 
 
 def remember_issued(state):
